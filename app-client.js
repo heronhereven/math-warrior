@@ -1110,8 +1110,8 @@
     document.getElementById("hero-level").textContent = `LV.${current.level}`;
     document.getElementById("hero-name").textContent = app.user?.display_name || "泡面侠";
     document.getElementById("hero-title").textContent = statusCopy(today);
-    document.getElementById("xp-total").textContent = `${app.state.totalXp} XP`;
-    document.getElementById("xp-next").textContent = next ? `距离 Lv.${next.level} 还差 ${Math.max(0, next.xp - app.state.totalXp)} XP` : "已经把这个世界刷到顶了";
+    document.getElementById("xp-total").textContent = `${app.state.totalXp} 块泡面`;
+    document.getElementById("xp-next").textContent = next ? `距离 Lv.${next.level} 还差 ${Math.max(0, next.xp - app.state.totalXp)} 块泡面` : "已经把这个世界刷到顶了";
     document.getElementById("xp-fill").style.width = `${Math.round(ratio * 100)}%`;
     const streak = document.getElementById("hero-streak");
     streak.classList.toggle("mq-hidden", app.state.streak <= 1);
@@ -1121,7 +1121,7 @@
     document.getElementById("hero-metrics").innerHTML = [
       renderMetricCard("今日已认可", formatMinutes(approvedMinutes(today)), approvedMinutes(today) >= DAILY_GOAL_MINUTES ? "green" : ""),
       renderMetricCard("待审核", pendingMinutes(today) ? formatMinutes(pendingMinutes(today)) : "0 分钟", pendingMinutes(today) ? "gray" : ""),
-      renderMetricCard("今日经验", `+${today.xpEarned} XP`, approvedMinutes(today) ? "gold" : "gray"),
+      renderMetricCard("今日泡面", `+${today.xpEarned} 块泡面`, approvedMinutes(today) ? "gold" : "gray"),
       renderMetricCard("最近签到", app.state.lastDate ? formatDate(app.state.lastDate) : "还没盖章", today.checkin.rewardXp > 0 ? "green" : "gray"),
     ].join("");
   }
@@ -1321,8 +1321,8 @@
             <div class="mq-ring-side">
               ${renderMetricCard("今日目标", `${DAILY_GOAL_MINUTES} 分钟`)}
               ${renderMetricCard("待审核", pending ? formatMinutes(pending) : "0 分钟", pending ? "gray" : "")}
-              ${renderMetricCard("签到奖励", day.checkin.rewardXp ? `+${day.checkin.rewardXp} XP` : "暂未结算", day.checkin.rewardXp ? "gold" : "gray")}
-              ${renderMetricCard("今日总 XP", `+${day.xpEarned} XP`, approved ? "green" : "gray")}
+              ${renderMetricCard("签到奖励", day.checkin.rewardXp ? `+${day.checkin.rewardXp} 块泡面` : "暂未结算", day.checkin.rewardXp ? "gold" : "gray")}
+              ${renderMetricCard("今日总泡面", `+${day.xpEarned} 块泡面`, approved ? "green" : "gray")}
             </div>
           </div>
         </section>
@@ -1349,7 +1349,7 @@
             </label>
             <button type="submit" class="mq-primary-btn">送出学习证明</button>
           </form>
-          <p class="mq-helper">在小和返回之前，不会点亮圆环、等级或经验条。但你的印章可以先盖上。</p>
+          <p class="mq-helper">在小和返回之前，不会点亮圆环、等级或泡面条。但你的印章可以先盖上。</p>
         </section>
       </div>
 
@@ -1423,7 +1423,7 @@
               <article class="mq-journey-card ${tone}">
                 <div class="mq-journey-top">
                   <strong>${escapeHtml(dateKey)}</strong>
-                  <span>+${day.xpEarned} XP</span>
+                  <span>+${day.xpEarned} 块泡面</span>
                 </div>
                 <p>已认可 ${formatMinutes(approvedMinutes(day))} · 待审核 ${formatMinutes(pendingMinutes(day))}</p>
                 <p>任务 ${countDoneTasks(day)}/3 · 日志 ${journalCount(day)}/3</p>
@@ -1450,7 +1450,7 @@
             ${renderMetricCard("小鸭子印章", `${duckDays} 次`, duckDays ? "gold" : "gray")}
             ${renderMetricCard("闪金天数", `${overDays} 天`, overDays ? "gold" : "gray")}
             ${renderMetricCard("最长同章连击", `${comboMax} 天`, comboMax > 1 ? "green" : "gray")}
-            ${renderMetricCard("总经验", `${app.state.totalXp} XP`, app.state.totalXp ? "green" : "gray")}
+            ${renderMetricCard("总泡面", `${app.state.totalXp} 块泡面`, app.state.totalXp ? "green" : "gray")}
           </div>
         </section>
 
@@ -1461,7 +1461,7 @@
           <div class="mq-story-list">
             <div class="mq-story-line">最近一次盖章：${app.state.lastDate ? formatDate(app.state.lastDate) : "还没有"}</div>
             <div class="mq-story-line">连续签到：${app.state.streak} 天</div>
-            <div class="mq-story-line">最近 7 天里，只要小和点头，经验条就会跟着冲刺。</div>
+            <div class="mq-story-line">最近 7 天里，只要小和点头，泡面条就会跟着冲刺。</div>
           </div>
         </section>
       </div>
@@ -1683,7 +1683,7 @@
         (item) => `
           <div class="mq-admin-activity-row">
             <strong>${escapeHtml(item.date)}</strong>
-            <span>${formatMinutes(item.studyMinutes || 0)} · +${item.xpEarned || 0} XP</span>
+            <span>${formatMinutes(item.studyMinutes || 0)} · +${item.xpEarned || 0} 块泡面</span>
             <div class="mq-admin-activity-bar">
               <div class="mq-admin-activity-fill ${item.progressState === "over" ? "gold" : item.progressState === "goal" ? "green" : ""}" style="width:${Math.min(100, Math.round(((item.studyMinutes || 0) / DAILY_GOAL_MINUTES) * 100))}%"></div>
             </div>
@@ -1702,7 +1702,7 @@
           </div>
           <div class="mq-admin-focus-badges">
             <span class="mq-pill">Lv.${summary.level?.level || 1}</span>
-            <span class="mq-pill">${summary.totalXp || 0} XP</span>
+            <span class="mq-pill">${summary.totalXp || 0} 块泡面</span>
           </div>
         </div>
 
@@ -1714,7 +1714,7 @@
             <div class="mq-admin-snapshot-grid">
               ${renderMetricCard("已认可时长", formatMinutes(approvedMinutes(day)), day.status.progressState === "goal" ? "green" : day.status.progressState === "over" ? "gold" : "gray")}
               ${renderMetricCard("待审核时长", formatMinutes(pendingMinutes(day)), pendingMinutes(day) ? "gray" : "")}
-              ${renderMetricCard("今日经验", `+${day.xpEarned} XP`, approvedMinutes(day) ? "gold" : "gray")}
+              ${renderMetricCard("今日泡面", `+${day.xpEarned} 块泡面`, approvedMinutes(day) ? "gold" : "gray")}
               ${renderMetricCard("签到印章", day.checkin.stamped ? `${day.checkin.emoji} ${day.checkin.label || ""}` : "未盖章", day.checkin.rewardXp ? "green" : "gray")}
             </div>
             <div class="mq-task-grid compact">${renderTaskButtons(day)}</div>
@@ -1783,7 +1783,7 @@
     for (let index = 0; index < count; index += 1) {
       const particle = document.createElement("span");
       particle.className = "mq-exp-particle";
-      particle.textContent = index % 5 === 0 ? `+${amount}` : "EXP";
+      particle.textContent = index % 5 === 0 ? `+${amount}泡面` : "泡面";
       particle.style.left = `${rect.left + rect.width * (0.15 + Math.random() * 0.7)}px`;
       particle.style.top = `${rect.top + rect.height / 2 + Math.random() * 12}px`;
       particle.style.animationDelay = `${index * 18}ms`;
