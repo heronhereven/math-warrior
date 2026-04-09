@@ -62,6 +62,7 @@
           <h1>泡面侠训练站</h1>
         </div>
         <div class="mq-topbar-actions">
+          <span id="learner-display-name" class="mq-user-chip">泡面侠</span>
           <span id="learner-role-pill" class="mq-pill">泡面侠</span>
           <button type="button" class="mq-ghost-btn" id="logout-btn">退出</button>
         </div>
@@ -116,6 +117,7 @@
           <h1>小和工作台</h1>
         </div>
         <div class="mq-topbar-actions">
+          <span id="admin-display-name" class="mq-user-chip">小和</span>
           <span class="mq-pill admin">小和专属</span>
           <button type="button" class="mq-ghost-btn" id="admin-logout-btn">退出</button>
         </div>
@@ -155,6 +157,26 @@
         </div>
       </main>
     </section>
+  </div>
+
+  <div id="checkin-modal" class="mq-overlay mq-hidden">
+    <div class="mq-modal-card">
+      <p class="mq-kicker pixel">stamp moment</p>
+      <h2>今天的印章准备好了</h2>
+      <p class="mq-modal-copy">盖章前，先给今天留两句可爱的注脚吧。</p>
+      <form id="checkin-form" class="mq-auth-form">
+        <label>今天感觉怎么样呢
+          <textarea id="checkin-mood" rows="3" placeholder="例如：今天脑子转得比昨天顺一点点"></textarea>
+        </label>
+        <label>有比昨天进步一点吗
+          <textarea id="checkin-progress" rows="3" placeholder="例如：至少这次没有被同一题型吓住"></textarea>
+        </label>
+        <div class="mq-modal-actions">
+          <button type="button" class="mq-ghost-btn" id="checkin-later-btn">稍后再说</button>
+          <button type="submit" class="mq-primary-btn">盖上今天的章</button>
+        </div>
+      </form>
+    </div>
   </div>
 
   <div id="toast" class="mq-toast"></div>

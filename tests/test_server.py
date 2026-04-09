@@ -117,11 +117,24 @@ class MathQuestServerTest(unittest.TestCase):
         self.assertEqual(data["state"]["history"]["2026-04-09"]["journal"]["top"], "函数题")
         self.assertEqual(data["state"]["totalXp"], 0)
 
+        status, data = client.request(
+            "POST",
+            "/api/submissions",
+            {
+                "date_key": "2026-04-09",
+                "duration_minutes": 120,
+                "note": "今天先把目标时长送上去",
+                "evidence_name": "proof.txt",
+                "evidence_data": "data:text/plain;base64,SGVsbG8gTWF0aCBRdWVzdA==",
+            },
+        )
+        self.assertEqual(status, 201)
+
         status, data = client.request("POST", "/api/checkin", {"date_key": "2026-04-09"})
         self.assertEqual(status, 200)
         self.assertTrue(data["checkin"]["stamped"])
         self.assertEqual(data["state"]["history"]["2026-04-09"]["checkin"]["rewardXp"], 0)
-        self.assertEqual(data["state"]["history"]["2026-04-09"]["status"]["rewardState"], "muted")
+        self.assertEqual(data["state"]["history"]["2026-04-09"]["status"]["rewardState"], "pending")
 
         status, data = client.request(
             "PUT",
@@ -189,6 +202,19 @@ class MathQuestServerTest(unittest.TestCase):
         self.assertEqual(data["user"]["username"], "bob02")
         self.assertEqual(data["summary"]["totalXp"], 0)
         self.assertEqual(data["state"]["history"]["2026-04-08"]["journal"]["top"], "几何")
+
+        status, _ = user_client.request(
+            "POST",
+            "/api/submissions",
+            {
+                "date_key": "2026-04-08",
+                "duration_minutes": 180,
+                "note": "周末目标时长提交",
+                "evidence_name": "proof.txt",
+                "evidence_data": "data:text/plain;base64,SGVsbG8gTWF0aCBRdWVzdA==",
+            },
+        )
+        self.assertEqual(status, 201)
 
         status, data = user_client.request("POST", "/api/checkin", {"date_key": "2026-04-08"})
         self.assertEqual(status, 200)

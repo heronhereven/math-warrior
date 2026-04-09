@@ -16,6 +16,7 @@
     { emoji: "🐥", rarity: 9, label: "小鸭子", weight: 1 },
   ];
   const LOCAL_STORE_KEY = "mq_local_backend_v1";
+  const WEEKEND_GOAL_MINUTES = 180;
   const TASK_XP = { correction: 24, difficulty: 22, review: 18 };
   const JOURNAL_XP = 22;
   const GOAL_BONUS_XP = 46;
@@ -42,8 +43,12 @@
     user: null,
     state: defaultState(),
     submissions: [],
+    bonusTasks: [],
+    bonusSubmissions: [],
     adminUsers: [],
     adminDetailCache: new Map(),
+    adminBonusTasks: [],
+    adminBonusSubmissions: [],
     adminSelectedUserId: null,
     adminGroup: "pending",
     learnerView: "dashboard",
@@ -58,6 +63,8 @@
     latestStampDate: null,
     backendReachable: false,
     transport: "remote",
+    pendingCheckinDateKey: null,
+    dismissedCheckinDateKey: null,
   };
 
   function defaultState() {
@@ -84,6 +91,10 @@
         rejectedCount: 0,
         progressState: "locked",
         rewardState: "idle",
+        bonusReward: 0,
+        bonusApprovedCount: 0,
+        bonusPendingCount: 0,
+        bonusLatestTitle: "",
       },
     };
   }
@@ -151,6 +162,8 @@
       rarity: clampInt(raw.rarity, 0, 10, 0),
       label: typeof raw.label === "string" ? raw.label : "",
       stampedAt: typeof raw.stampedAt === "string" ? raw.stampedAt : null,
+      moodNote: typeof raw.moodNote === "string" ? raw.moodNote : "",
+      progressNote: typeof raw.progressNote === "string" ? raw.progressNote : "",
       comboBonusXp: clampInt(raw.comboBonusXp, 0, 200000, 0),
       comboDays: clampInt(raw.comboDays, 0, 365, 0),
       rewardXp: clampInt(raw.rewardXp, 0, 200000, 0),
@@ -170,6 +183,10 @@
       rejectedCount: clampInt(raw.rejectedCount, 0, 1000, 0),
       progressState: typeof raw.progressState === "string" ? raw.progressState : "locked",
       rewardState: typeof raw.rewardState === "string" ? raw.rewardState : "idle",
+      bonusReward: clampInt(raw.bonusReward, 0, 1000000, 0),
+      bonusApprovedCount: clampInt(raw.bonusApprovedCount, 0, 1000, 0),
+      bonusPendingCount: clampInt(raw.bonusPendingCount, 0, 1000, 0),
+      bonusLatestTitle: typeof raw.bonusLatestTitle === "string" ? raw.bonusLatestTitle : "",
     };
   }
 
@@ -249,6 +266,13 @@
     return localDateKey();
   }
 
+  function goalMinutesForDate(dateKey = currentDayKey()) {
+    const parsed = parseDateKey(dateKey);
+    if (!parsed) return DAILY_GOAL_MINUTES;
+    const weekday = parsed.getDay();
+    return weekday === 0 || weekday === 6 ? WEEKEND_GOAL_MINUTES : DAILY_GOAL_MINUTES;
+  }
+
   function ensureDay(dateKey = currentDayKey()) {
     if (!app.state.history[dateKey]) {
       app.state.history[dateKey] = defaultDay();
@@ -264,6 +288,10 @@
 
   function pendingMinutes(day) {
     return clampInt(day?.status?.pendingMinutes, 0, 720, 0);
+  }
+
+  function submittedMinutes(day) {
+    return approvedMinutes(day) + pendingMinutes(day);
   }
 
   function countDoneTasks(day) {
@@ -288,6 +316,8 @@
       currentUserId: null,
       nextUserId: 2,
       nextSubmissionId: 1,
+      nextBonusTaskId: 1,
+      nextBonusSubmissionId: 1,
       users: [
         {
           id: 1,
@@ -301,6 +331,8 @@
       ],
       states: {},
       submissions: [],
+      bonusTasks: [],
+      bonusTaskSubmissions: [],
     };
   }
 
@@ -341,6 +373,8 @@
     base.currentUserId = clampInt(raw.currentUserId, 0, 10000000, 0) || null;
     base.nextUserId = clampInt(raw.nextUserId, 2, 10000000, Math.max(...base.users.map((item) => item.id), 1) + 1);
     base.nextSubmissionId = clampInt(raw.nextSubmissionId, 1, 10000000, 1);
+    base.nextBonusTaskId = clampInt(raw.nextBonusTaskId, 1, 10000000, 1);
+    base.nextBonusSubmissionId = clampInt(raw.nextBonusSubmissionId, 1, 10000000, 1);
     if (raw.states && typeof raw.states === "object") {
       Object.entries(raw.states).forEach(([key, value]) => {
         base.states[key] = normalizeState(value);
@@ -365,6 +399,43 @@
           evidence_url: typeof item.evidence_url === "string" ? item.evidence_url : "",
         }))
         .filter((item) => item.id > 0 && item.user_id > 0);
+    }
+    if (Array.isArray(raw.bonusTasks)) {
+      base.bonusTasks = raw.bonusTasks
+        .filter((item) => item && typeof item === "object")
+        .map((item) => ({
+          id: clampInt(item.id, 1, 10000000, 0),
+          title: typeof item.title === "string" ? item.title : "",
+          description: typeof item.description === "string" ? item.description : "",
+          difficulty: clampInt(item.difficulty, 1, 5, 1),
+          target_days: clampInt(item.target_days, 1, 30, 3),
+          active: item.active !== false,
+          created_at: typeof item.created_at === "string" ? item.created_at : currentIso(),
+        }))
+        .filter((item) => item.id > 0);
+    }
+    if (Array.isArray(raw.bonusTaskSubmissions)) {
+      base.bonusTaskSubmissions = raw.bonusTaskSubmissions
+        .filter((item) => item && typeof item === "object")
+        .map((item) => ({
+          id: clampInt(item.id, 1, 10000000, 0),
+          task_id: clampInt(item.task_id, 1, 10000000, 0),
+          user_id: clampInt(item.user_id, 1, 10000000, 0),
+          completed_date_key: typeof item.completed_date_key === "string" ? item.completed_date_key : currentDayKey(),
+          note: typeof item.note === "string" ? item.note : "",
+          status: typeof item.status === "string" ? item.status : "pending",
+          admin_note: typeof item.admin_note === "string" ? item.admin_note : "",
+          created_at: typeof item.created_at === "string" ? item.created_at : currentIso(),
+          reviewed_at: typeof item.reviewed_at === "string" ? item.reviewed_at : null,
+          reviewed_by: clampInt(item.reviewed_by, 0, 10000000, 0) || null,
+          reward_total: clampInt(item.reward_total, 0, 1000000, 0),
+          speed_tier: typeof item.speed_tier === "string" ? item.speed_tier : "",
+          speed_multiplier: Number.isFinite(Number(item.speed_multiplier)) ? Number(item.speed_multiplier) : 1,
+          evidence_name: typeof item.evidence_name === "string" ? item.evidence_name : "proof",
+          evidence_mime: typeof item.evidence_mime === "string" ? item.evidence_mime : "application/octet-stream",
+          evidence_url: typeof item.evidence_url === "string" ? item.evidence_url : "",
+        }))
+        .filter((item) => item.id > 0 && item.user_id > 0 && item.task_id > 0);
     }
     return base;
   }
@@ -426,31 +497,44 @@
       .forEach((dateKey) => {
         const day = normalizeDay(history[dateKey]);
         const daySubs = submissions.filter((item) => item.date_key === dateKey);
+        const dayBonus = store.bonusTaskSubmissions
+          .filter((item) => item.user_id === userId && item.completed_date_key === dateKey)
+          .map((item) => ({
+            ...item,
+            task_title: store.bonusTasks.find((task) => task.id === item.task_id)?.title || "",
+          }));
         const approved = daySubs.filter((item) => item.status === "approved");
         const pending = daySubs.filter((item) => item.status === "pending");
         const rejected = daySubs.filter((item) => item.status === "rejected");
+        const approvedBonus = dayBonus.filter((item) => item.status === "approved");
+        const pendingBonus = dayBonus.filter((item) => item.status === "pending");
         const approvedMinutes = approved.reduce((sum, item) => sum + item.duration_minutes, 0);
         const pendingMinutesValue = pending.reduce((sum, item) => sum + item.duration_minutes, 0);
         const rejectedMinutes = rejected.reduce((sum, item) => sum + item.duration_minutes, 0);
+        const goalMinutes = goalMinutesForDate(dateKey);
         day.segments = approvedMinutes ? [{ s: 0, e: approvedMinutes }] : [];
         day.status = {
-          goalMinutes: DAILY_GOAL_MINUTES,
+          goalMinutes,
           approvedMinutes,
           pendingMinutes: pendingMinutesValue,
           rejectedMinutes,
           approvedCount: approved.length,
           pendingCount: pending.length,
           rejectedCount: rejected.length,
-          progressState: approvedMinutes > DAILY_GOAL_MINUTES ? "over" : approvedMinutes >= DAILY_GOAL_MINUTES ? "goal" : approvedMinutes > 0 ? "growing" : "locked",
+          progressState: approvedMinutes > goalMinutes ? "over" : approvedMinutes >= goalMinutes ? "goal" : approvedMinutes > 0 ? "growing" : "locked",
           rewardState: !day.checkin.stamped
             ? "idle"
-            : approvedMinutes > DAILY_GOAL_MINUTES
+            : approvedMinutes > goalMinutes
               ? "over"
-              : approvedMinutes >= DAILY_GOAL_MINUTES
+              : approvedMinutes >= goalMinutes
                 ? "earned"
                 : pendingMinutesValue > 0
                   ? "pending"
                   : "muted",
+          bonusReward: approvedBonus.reduce((sum, item) => sum + item.reward_total, 0),
+          bonusApprovedCount: approvedBonus.length,
+          bonusPendingCount: pendingBonus.length,
+          bonusLatestTitle: approvedBonus[0]?.task_title || pendingBonus[0]?.task_title || "",
         };
         let comboDays = 0;
         if (day.checkin.stamped) {
@@ -464,23 +548,21 @@
             comboDays += 1;
           }
         }
-        const baseReward = day.checkin.stamped && approvedMinutes >= DAILY_GOAL_MINUTES ? STAMP_REWARD_BASE * day.checkin.rarity : 0;
+        const baseReward = day.checkin.stamped && approvedMinutes >= goalMinutes ? STAMP_REWARD_BASE * day.checkin.rarity : 0;
         const comboBonus = comboDays > 1 && baseReward ? baseReward * (2 ** (comboDays - 1)) : 0;
-        const overBoost = approvedMinutes > DAILY_GOAL_MINUTES && baseReward ? Math.round(baseReward * 0.4 + comboBonus * 0.25) : 0;
+        const overBoost = approvedMinutes > goalMinutes && baseReward ? Math.round(baseReward * 0.4 + comboBonus * 0.25) : 0;
         day.checkin.comboDays = comboDays;
         day.checkin.comboBonusXp = comboBonus;
         day.checkin.rewardXp = baseReward + comboBonus + overBoost;
         let xp = 0;
         if (approvedMinutes > 0) {
           xp += computeStudyXp(approvedMinutes);
-          Object.entries(TASK_XP).forEach(([key, amount]) => {
-            if (day.tasks[key]) xp += amount;
-          });
-          if (journalCount(day) > 0) xp += JOURNAL_XP;
-          if (approvedMinutes >= DAILY_GOAL_MINUTES && isAllTasksDone(day)) xp += GOAL_BONUS_XP;
-          if (approvedMinutes > DAILY_GOAL_MINUTES) xp += OVERACHIEVE_BONUS_XP;
+          if ((day.checkin.moodNote || "").trim() || (day.checkin.progressNote || "").trim()) xp += JOURNAL_XP;
+          if (approvedMinutes >= goalMinutes) xp += GOAL_BONUS_XP;
+          if (approvedMinutes > goalMinutes) xp += OVERACHIEVE_BONUS_XP;
           xp += day.checkin.rewardXp;
         }
+        xp += day.status.bonusReward;
         day.xpEarned = xp;
         history[dateKey] = day;
         totalXp += xp;
@@ -618,6 +700,9 @@
       const dateKey = String(body.date_key || currentDayKey());
       const raw = localRawState(store, currentUser.id);
       const day = normalizeDay(raw.history[dateKey] || defaultDay());
+      const todaySubs = store.submissions.filter((item) => item.user_id === currentUser.id && item.date_key === dateKey);
+      const eligibleMinutes = todaySubs.reduce((sum, item) => sum + item.duration_minutes, 0);
+      if (eligibleMinutes < goalMinutesForDate(dateKey)) localError(400, "完成当日目标时长对应的学习提交后，才可以盖章");
       if (!day.checkin.stamped) {
         const stamp = pickLocalStamp();
         day.checkin = {
@@ -626,10 +711,14 @@
           rarity: stamp.rarity,
           label: stamp.label,
           stampedAt: currentIso(),
+          moodNote: String(body.mood_note || "").slice(0, 120),
+          progressNote: String(body.progress_note || "").slice(0, 120),
           comboBonusXp: 0,
           comboDays: 1,
           rewardXp: 0,
         };
+        day.journal.feel = day.checkin.moodNote;
+        day.journal.top = day.checkin.progressNote;
         raw.history[dateKey] = day;
         localSaveRawState(store, currentUser.id, raw);
         saveLocalBackend(store);
@@ -643,6 +732,20 @@
         .filter((item) => item.user_id === currentUser.id)
         .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
       return { submissions };
+    }
+
+    if (path === "/api/bonus-tasks" && method === "GET") {
+      const tasks = (currentUser.is_admin ? store.bonusTasks : store.bonusTasks.filter((item) => item.active)).slice().sort((left, right) => right.id - left.id);
+      const submissions = store.bonusTaskSubmissions
+        .filter((item) => (currentUser.is_admin ? true : item.user_id === currentUser.id))
+        .map((item) => ({
+          ...item,
+          task: store.bonusTasks.find((task) => task.id === item.task_id) || null,
+          user: currentUser.is_admin ? localPublicUser(localUserById(store, item.user_id)) : undefined,
+          evidence_url: item.evidence_url,
+        }))
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
+      return { tasks, submissions, state: localHydrateState(store, currentUser.id) };
     }
 
     if (path === "/api/submissions" && method === "POST") {
@@ -668,6 +771,41 @@
       store.submissions.push(submission);
       saveLocalBackend(store);
       return { submission };
+    }
+
+    if (path === "/api/bonus-task-submissions" && method === "POST") {
+      if (currentUser.is_admin) localError(403, "小和不会在这里提交附加任务");
+      const taskId = clampInt(body.task_id, 1, 10000000, 0);
+      const task = store.bonusTasks.find((item) => item.id === taskId && item.active);
+      if (!task) localError(404, "附加任务不存在");
+      const completedDateKey = String(body.completed_date_key || currentDayKey());
+      const state = localHydrateState(store, currentUser.id);
+      const day = normalizeDay(state.history[completedDateKey]);
+      if (!day.checkin.stamped) localError(400, "盖章之后才会解锁附加任务");
+      const evidenceUrl = String(body.evidence_data || "");
+      if (!evidenceUrl) localError(400, "附加任务提交也需要附上凭证");
+      const submission = {
+        id: store.nextBonusSubmissionId,
+        task_id: taskId,
+        user_id: currentUser.id,
+        completed_date_key: completedDateKey,
+        note: String(body.note || "").slice(0, 500),
+        status: "pending",
+        admin_note: "",
+        created_at: currentIso(),
+        reviewed_at: null,
+        reviewed_by: null,
+        reward_total: 0,
+        speed_tier: "",
+        speed_multiplier: 1,
+        evidence_name: String(body.evidence_name || "proof"),
+        evidence_mime: String((body.evidence_data || "").split(";")[0].replace("data:", "") || "application/octet-stream"),
+        evidence_url: evidenceUrl,
+      };
+      store.nextBonusSubmissionId += 1;
+      store.bonusTaskSubmissions.push(submission);
+      saveLocalBackend(store);
+      return { submission: { ...submission, task } };
     }
 
     if (path === "/api/me" && method === "PUT") {
@@ -720,7 +858,44 @@
         summary,
         state: localHydrateState(store, target.id),
         submissions: store.submissions.filter((item) => item.user_id === target.id).sort((left, right) => String(right.created_at).localeCompare(String(left.created_at))),
+        bonus_submissions: store.bonusTaskSubmissions
+          .filter((item) => item.user_id === target.id)
+          .map((item) => ({ ...item, task: store.bonusTasks.find((task) => task.id === item.task_id) || null, user: localPublicUser(target) }))
+          .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at))),
       };
+    }
+
+    if (path === "/api/admin/bonus-tasks" && method === "GET") {
+      if (!currentUser.is_admin) localError(403, "需要管理员权限");
+      return {
+        tasks: store.bonusTasks.slice().sort((left, right) => right.id - left.id),
+        submissions: store.bonusTaskSubmissions
+          .map((item) => ({
+            ...item,
+            task: store.bonusTasks.find((task) => task.id === item.task_id) || null,
+            user: localPublicUser(localUserById(store, item.user_id)),
+          }))
+          .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at))),
+      };
+    }
+
+    if (path === "/api/admin/bonus-tasks" && method === "POST") {
+      if (!currentUser.is_admin) localError(403, "需要管理员权限");
+      const title = String(body.title || "").trim().slice(0, 80);
+      if (!title) localError(400, "附加任务要有标题");
+      const task = {
+        id: store.nextBonusTaskId,
+        title,
+        description: String(body.description || "").slice(0, 500),
+        difficulty: clampInt(body.difficulty, 1, 5, 1),
+        target_days: clampInt(body.target_days, 1, 30, 3),
+        active: true,
+        created_at: currentIso(),
+      };
+      store.nextBonusTaskId += 1;
+      store.bonusTasks.push(task);
+      saveLocalBackend(store);
+      return { task };
     }
 
     if (path.startsWith("/api/admin/submissions/") && path.endsWith("/review") && method === "POST") {
@@ -742,6 +917,41 @@
           user: localPublicUser(localUserById(store, submission.user_id)),
         },
       };
+    }
+
+    if (path.startsWith("/api/admin/bonus-task-submissions/") && path.endsWith("/review") && method === "POST") {
+      if (!currentUser.is_admin) localError(403, "需要管理员权限");
+      const parts = path.split("/");
+      const submissionId = clampInt(parts[4], 1, 10000000, 0);
+      const submission = store.bonusTaskSubmissions.find((item) => item.id === submissionId);
+      if (!submission) localError(404, "提交不存在");
+      const task = store.bonusTasks.find((item) => item.id === submission.task_id);
+      const action = String(body.action || "").trim().toLowerCase();
+      if (!["approve", "reject"].includes(action)) localError(400, "action 只能是 approve 或 reject");
+      submission.status = action === "approve" ? "approved" : "rejected";
+      submission.admin_note = String(body.admin_note || "").slice(0, 500);
+      submission.reviewed_at = currentIso();
+      submission.reviewed_by = currentUser.id;
+      if (submission.status === "approved" && task) {
+        const elapsed = Math.max(0, (new Date(submission.created_at).getTime() - new Date(task.created_at).getTime()) / 86400000);
+        if (elapsed <= Math.max(0.5, task.target_days * 0.5)) {
+          submission.speed_tier = "闪电完成";
+          submission.speed_multiplier = 1.8;
+        } else if (elapsed <= task.target_days) {
+          submission.speed_tier = "稳稳拿下";
+          submission.speed_multiplier = 1.35;
+        } else {
+          submission.speed_tier = "坚持完成";
+          submission.speed_multiplier = 1.0;
+        }
+        submission.reward_total = Math.round((80 + task.difficulty * 35) * submission.speed_multiplier);
+      } else {
+        submission.speed_tier = "";
+        submission.speed_multiplier = 1;
+        submission.reward_total = 0;
+      }
+      saveLocalBackend(store);
+      return { submission: { ...submission, task, user: localPublicUser(localUserById(store, submission.user_id)) } };
     }
 
     localError(404, "接口不存在");
@@ -866,15 +1076,23 @@
   }
 
   async function refreshLearnerBundle(silent = false) {
-    const [stateData, submissionData] = await Promise.all([api("/api/state"), api("/api/submissions/mine")]);
+    const [stateData, submissionData, bonusData] = await Promise.all([
+      api("/api/state"),
+      api("/api/submissions/mine"),
+      api("/api/bonus-tasks"),
+    ]);
     mergeServerState(stateData.state, { animate: !silent && app.booted });
     app.submissions = Array.isArray(submissionData.submissions) ? submissionData.submissions : [];
+    app.bonusTasks = Array.isArray(bonusData.tasks) ? bonusData.tasks : [];
+    app.bonusSubmissions = Array.isArray(bonusData.submissions) ? bonusData.submissions : [];
     renderLearner();
   }
 
   async function refreshAdminBundle(silent = false) {
-    const data = await api("/api/admin/users");
+    const [data, bonusData] = await Promise.all([api("/api/admin/users"), api("/api/admin/bonus-tasks")]);
     app.adminUsers = Array.isArray(data.users) ? data.users : [];
+    app.adminBonusTasks = Array.isArray(bonusData.tasks) ? bonusData.tasks : [];
+    app.adminBonusSubmissions = Array.isArray(bonusData.submissions) ? bonusData.submissions : [];
     if (!app.adminUsers.length) {
       app.adminSelectedUserId = null;
       renderAdmin();
@@ -934,23 +1152,62 @@
     }, SAVE_DELAY);
   }
 
-  async function maybeAutoCheckin() {
-    if (!app.user || app.user.is_admin || app.checkinInFlight) return;
-    const dateKey = currentDayKey();
+  function shouldPromptCheckin(dateKey = currentDayKey()) {
+    if (!app.user || app.user.is_admin) return false;
     const day = ensureDay(dateKey);
-    if (!isAllTasksDone(day) || day.checkin.stamped) return;
+    return !day.checkin.stamped && submittedMinutes(day) >= goalMinutesForDate(dateKey);
+  }
+
+  function openCheckinModal(dateKey = currentDayKey()) {
+    app.pendingCheckinDateKey = dateKey;
+    app.dismissedCheckinDateKey = null;
+    document.getElementById("checkin-mood").value = "";
+    document.getElementById("checkin-progress").value = "";
+    document.getElementById("checkin-modal").classList.remove("mq-hidden");
+  }
+
+  function closeCheckinModal() {
+    if (app.pendingCheckinDateKey) {
+      app.dismissedCheckinDateKey = app.pendingCheckinDateKey;
+    }
+    app.pendingCheckinDateKey = null;
+    document.getElementById("checkin-modal").classList.add("mq-hidden");
+  }
+
+  async function submitCheckin(event) {
+    event.preventDefault();
+    const dateKey = app.pendingCheckinDateKey || currentDayKey();
     app.checkinInFlight = true;
     try {
-      const data = await api("/api/checkin", { method: "POST", body: { date_key: dateKey } });
+      const data = await api("/api/checkin", {
+        method: "POST",
+        body: {
+          date_key: dateKey,
+          mood_note: document.getElementById("checkin-mood").value.trim(),
+          progress_note: document.getElementById("checkin-progress").value.trim(),
+        },
+      });
       mergeServerState(data.state, { animate: false });
       app.latestStampDate = dateKey;
       playStampSound();
+      app.pendingCheckinDateKey = null;
+      app.dismissedCheckinDateKey = null;
+      document.getElementById("checkin-modal").classList.add("mq-hidden");
       renderLearner();
-      showToast(`${data.checkin?.emoji || "🫶"} 今天的印章盖好了，等小和点头就会发奖励`);
+      showToast(`${data.checkin?.emoji || "🫶"} 今天的印章盖好了，等小和点头后奖励会落下来`);
     } catch (error) {
-      showToast(error.payload?.error || "自动盖章失败", "error");
+      showToast(error.payload?.error || "盖章失败", "error");
     } finally {
       app.checkinInFlight = false;
+    }
+  }
+
+  function maybePromptCheckin() {
+    if (app.checkinInFlight || app.pendingCheckinDateKey) return;
+    const dateKey = currentDayKey();
+    if (app.dismissedCheckinDateKey === dateKey) return;
+    if (shouldPromptCheckin(dateKey)) {
+      openCheckinModal(dateKey);
     }
   }
 
@@ -995,6 +1252,7 @@
       });
       form.reset();
       form.querySelector("[name='date_key']").value = currentDayKey();
+      app.dismissedCheckinDateKey = null;
       await refreshLearnerBundle(true);
       showToast("证明已经送到小和桌上啦");
     } catch (error) {
@@ -1095,11 +1353,12 @@
   function statusCopy(day) {
     const approved = approvedMinutes(day);
     const pending = pendingMinutes(day);
-    if (approved > DAILY_GOAL_MINUTES) return "今天已经闪金啦，圆环正在冒光。";
-    if (approved >= DAILY_GOAL_MINUTES) return "今天的目标稳稳完成，小和看到会很高兴。";
+    const goal = day?.status?.goalMinutes || goalMinutesForDate();
+    if (approved > goal) return "今天已经闪金啦，圆环正在冒光。";
+    if (approved >= goal) return "今天的目标稳稳完成，小和看到会很高兴。";
     if (pending > 0) return "证明已经送出去了，先等小和回信。";
     if (day.checkin.stamped) return "章先盖上了，奖励会在审核通过后落下来。";
-    return "把三件小任务点亮，今天的印章就会自己砰地一声盖下来。";
+    return `今天的盖章目标是 ${goal} 分钟，送出够量的学习证明后就能盖章。`;
   }
 
   function renderHero() {
@@ -1119,7 +1378,7 @@
     document.getElementById("learner-role-pill").textContent = "泡面侠";
 
     document.getElementById("hero-metrics").innerHTML = [
-      renderMetricCard("今日已认可", formatMinutes(approvedMinutes(today)), approvedMinutes(today) >= DAILY_GOAL_MINUTES ? "green" : ""),
+      renderMetricCard("今日已认可", formatMinutes(approvedMinutes(today)), approvedMinutes(today) >= (today.status.goalMinutes || goalMinutesForDate()) ? "green" : ""),
       renderMetricCard("待审核", pendingMinutes(today) ? formatMinutes(pendingMinutes(today)) : "0 分钟", pendingMinutes(today) ? "gray" : ""),
       renderMetricCard("今日泡面", `+${today.xpEarned} 块泡面`, approvedMinutes(today) ? "gold" : "gray"),
       renderMetricCard("最近签到", app.state.lastDate ? formatDate(app.state.lastDate) : "还没盖章", today.checkin.rewardXp > 0 ? "green" : "gray"),
@@ -1136,8 +1395,9 @@
 
   function ringStroke(day) {
     const approved = approvedMinutes(day);
+    const goal = day?.status?.goalMinutes || goalMinutesForDate();
     if (!approved) return CIRCUMFERENCE;
-    const percent = Math.max(0, Math.min(1, approved / DAILY_GOAL_MINUTES));
+    const percent = Math.max(0, Math.min(1, approved / goal));
     return CIRCUMFERENCE * (1 - percent);
   }
 
@@ -1192,6 +1452,117 @@
     if (status === "approved") return "green";
     if (status === "rejected") return "red";
     return "gray";
+  }
+
+  function renderBonusTasks(day) {
+    if (!day.checkin.stamped) {
+      return `<div class="mq-empty-card locked">今天还没盖章，附加任务会在盖章之后解锁。</div>`;
+    }
+    if (!app.bonusTasks.length) {
+      return `<div class="mq-empty-card">小和还没发布新的附加任务。先把今天的章贴好，等她发新挑战。</div>`;
+    }
+    return app.bonusTasks
+      .map((task) => {
+        const related = app.bonusSubmissions.filter((item) => item.task_id === task.id);
+        const latest = related[0];
+        const formId = `bonus-form-${task.id}`;
+        return `
+          <article class="mq-bonus-card">
+            <div class="mq-bonus-top">
+              <strong>${escapeHtml(task.title)}</strong>
+              <span class="mq-pill">难度 ${task.difficulty}/5</span>
+            </div>
+            <p class="mq-proof-note">${escapeHtml(task.description || "小和给你留了一份新的附加挑战。")}</p>
+            <div class="mq-bonus-meta">
+              <span>建议在 ${task.target_days} 天内完成</span>
+              <span>通过后会掉很多泡面</span>
+            </div>
+            ${
+              latest
+                ? `
+                  <div class="mq-bonus-meta">
+                    <span>${submissionStatusLabel(latest.status)}</span>
+                    <span>${latest.reward_total ? `+${latest.reward_total} 块泡面` : "等待结算"}</span>
+                  </div>
+                  ${latest.admin_note ? `<div class="mq-proof-note">小和留言：${escapeHtml(latest.admin_note)}</div>` : ""}
+                `
+                : `
+                  <form id="${formId}" class="mq-bonus-form" data-bonus-task-id="${task.id}">
+                    <textarea name="note" placeholder="写一句你是怎么完成这份附加任务的。"></textarea>
+                    <input name="evidence" type="file" accept="image/*,.pdf" required>
+                    <button type="submit" class="mq-primary-btn">提交附加任务凭证</button>
+                  </form>
+                `
+            }
+          </article>
+        `;
+      })
+      .join("");
+  }
+
+  function renderLineChart(days) {
+    const points = days.length ? days : [{ date: currentDayKey(), studyMinutes: 0, xpEarned: 0 }];
+    const width = 420;
+    const height = 220;
+    const pad = 24;
+    const maxValue = Math.max(1, ...points.map((item) => item.studyMinutes || 0));
+    const coordinates = points
+      .map((item, index) => {
+        const x = pad + (index * (width - pad * 2)) / Math.max(1, points.length - 1);
+        const y = height - pad - ((item.studyMinutes || 0) / maxValue) * (height - pad * 2);
+        return { x, y, item };
+      });
+    const polyline = coordinates.map((point) => `${point.x},${point.y}`).join(" ");
+    const dots = coordinates
+      .map(
+        (point) => `
+          <circle cx="${point.x}" cy="${point.y}" r="4" fill="#f5c842"></circle>
+          <text x="${point.x}" y="${point.y - 10}" text-anchor="middle" fill="#b7c2d8" font-size="11">${point.item.studyMinutes || 0}m</text>
+        `,
+      )
+      .join("");
+    const labels = points
+      .map((item) => `<span>${escapeHtml(item.date.slice(5))}</span>`)
+      .join("");
+    return `
+      <div class="mq-line-chart">
+        <svg viewBox="0 0 ${width} ${height}" aria-hidden="true">
+          <rect x="0" y="0" width="${width}" height="${height}" rx="18" fill="rgba(255,255,255,0.02)"></rect>
+          <polyline points="${polyline}" fill="none" stroke="#f5c842" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+          ${dots}
+        </svg>
+        <div class="mq-chart-labels">${labels}</div>
+      </div>
+    `;
+  }
+
+  function renderDonutChart(completed, pending, over) {
+    const total = Math.max(1, completed + pending + over);
+    const circumference = 2 * Math.PI * 54;
+    const slices = [
+      { value: completed, color: "#4ade80" },
+      { value: over, color: "#f5c842" },
+      { value: pending, color: "#94a3b8" },
+    ];
+    let offset = 0;
+    const circles = slices
+      .map((slice) => {
+        const length = (slice.value / total) * circumference;
+        const node = `<circle cx="90" cy="90" r="54" fill="none" stroke="${slice.color}" stroke-width="18" stroke-dasharray="${length} ${circumference - length}" stroke-dashoffset="${-offset}" transform="rotate(-90 90 90)"></circle>`;
+        offset += length;
+        return node;
+      })
+      .join("");
+    return `
+      <div class="mq-donut-chart">
+        <svg viewBox="0 0 180 180" aria-hidden="true">
+          <circle cx="90" cy="90" r="54" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="18"></circle>
+          ${circles}
+          <text x="90" y="86" text-anchor="middle" fill="#eef2ff" font-size="20" font-weight="700">${completed + over}</text>
+          <text x="90" y="108" text-anchor="middle" fill="#b7c2d8" font-size="12">达标天数</text>
+        </svg>
+      </div>
+    `;
   }
 
   function renderProofList() {
@@ -1297,6 +1668,7 @@
     const approved = approvedMinutes(day);
     const pending = pendingMinutes(day);
     const ringClass = ringTone(day);
+    const goal = day.status.goalMinutes || goalMinutesForDate();
     return `
       <div class="mq-dashboard-grid">
         <section class="mq-panel-card mq-ring-card ${ringClass}">
@@ -1319,7 +1691,7 @@
               </div>
             </div>
             <div class="mq-ring-side">
-              ${renderMetricCard("今日目标", `${DAILY_GOAL_MINUTES} 分钟`)}
+              ${renderMetricCard("今日目标", `${goal} 分钟`, goal > DAILY_GOAL_MINUTES ? "gold" : "")}
               ${renderMetricCard("待审核", pending ? formatMinutes(pending) : "0 分钟", pending ? "gray" : "")}
               ${renderMetricCard("签到奖励", day.checkin.rewardXp ? `+${day.checkin.rewardXp} 块泡面` : "暂未结算", day.checkin.rewardXp ? "gold" : "gray")}
               ${renderMetricCard("今日总泡面", `+${day.xpEarned} 块泡面`, approved ? "green" : "gray")}
@@ -1349,7 +1721,7 @@
             </label>
             <button type="submit" class="mq-primary-btn">送出学习证明</button>
           </form>
-          <p class="mq-helper">在小和返回之前，不会点亮圆环、等级或泡面条。但你的印章可以先盖上。</p>
+          <p class="mq-helper">今天的目标时长满足后，就会弹出盖章窗口。通过审核前，奖励会先静静等待。</p>
         </section>
       </div>
 
@@ -1357,30 +1729,12 @@
         <section class="mq-panel-card">
           <div class="mq-panel-head">
             <div>
-              <p class="mq-panel-kicker">daily checklist</p>
-              <h2>今天的小任务</h2>
+              <p class="mq-panel-kicker">bonus quest</p>
+              <h2>盖章后的附加任务</h2>
             </div>
-            <span class="mq-soft-note">${isAllTasksDone(day) ? "任务齐了，印章会自己跳下来" : "把三件事都点亮，就会自动签到"}</span>
+            <span class="mq-soft-note">${day.checkin.stamped ? "小和发布的附加挑战会在这里出现" : `先把今天的 ${goal} 分钟目标送出来，再来解锁这里`}</span>
           </div>
-          <div class="mq-task-grid">${renderTaskButtons(day)}</div>
-          <div class="mq-journal-grid">
-            <label>今天最值得记住的瞬间
-              <textarea data-journal-field="top" rows="3" placeholder="例如：终于看懂了导数题的破题点">${escapeHtml(day.journal.top)}</textarea>
-            </label>
-            <label>今天最卡的地方
-              <textarea data-journal-field="stuck" rows="3" placeholder="例如：圆锥曲线条件一多就开始乱">${escapeHtml(day.journal.stuck)}</textarea>
-            </label>
-            <label>给今天一句总结
-              <textarea data-journal-field="feel" rows="3" placeholder="例如：虽然慢，但我真的在往前挪">${escapeHtml(day.journal.feel)}</textarea>
-            </label>
-          </div>
-          <div class="mq-score-grid">
-            <div><span>难度感</span>${renderScoreButtons("difficulty", day.journal.difficulty)}</div>
-            <div><span>专注度</span>${renderScoreButtons("focus", day.journal.focus)}</div>
-            <div><span>努力值</span>${renderScoreButtons("effort", day.journal.effort)}</div>
-            <div><span>心情</span>${renderScoreButtons("mood", day.mood)}</div>
-            <div><span>能量</span>${renderScoreButtons("energy", day.energy)}</div>
-          </div>
+          <div class="mq-bonus-list">${renderBonusTasks(day)}</div>
         </section>
 
         <section class="mq-panel-card">
@@ -1393,17 +1747,6 @@
           <div class="mq-proof-list">${renderProofList()}</div>
         </section>
       </div>
-
-      <section class="mq-panel-card">
-        <div class="mq-panel-head">
-          <div>
-            <p class="mq-panel-kicker">stamp calendar</p>
-            <h2>印章月历</h2>
-          </div>
-          <div class="mq-legend-row">${renderCalendarLegend()}</div>
-        </div>
-        ${renderCalendarGrid()}
-      </section>
     `;
   }
 
@@ -1440,6 +1783,12 @@
     const duckDays = days.filter(([, day]) => normalizeDay(day).checkin.emoji === "🐥").length;
     const overDays = days.filter(([, day]) => normalizeDay(day).status.progressState === "over").length;
     const comboMax = days.reduce((max, [, day]) => Math.max(max, normalizeDay(day).checkin.comboDays || 0), 0);
+    const recentChartDays = days
+      .slice(0, 7)
+      .map(([date, rawDay]) => ({ date, studyMinutes: approvedMinutes(normalizeDay(rawDay)), xpEarned: normalizeDay(rawDay).xpEarned || 0 }))
+      .reverse();
+    const goalDays = days.filter(([, rawDay]) => normalizeDay(rawDay).status.progressState === "goal").length;
+    const pendingDays = days.filter(([, rawDay]) => pendingMinutes(normalizeDay(rawDay)) > 0).length;
     return `
       <div class="mq-dashboard-grid">
         <section class="mq-panel-card">
@@ -1463,6 +1812,17 @@
             <div class="mq-story-line">连续签到：${app.state.streak} 天</div>
             <div class="mq-story-line">最近 7 天里，只要小和点头，泡面条就会跟着冲刺。</div>
           </div>
+        </section>
+      </div>
+
+      <div class="mq-chart-grid">
+        <section class="mq-chart-card">
+          <h3>最近 7 天学习折线</h3>
+          ${renderLineChart(recentChartDays)}
+        </section>
+        <section class="mq-chart-card">
+          <h3>达标状态分布</h3>
+          ${renderDonutChart(goalDays, pendingDays, overDays)}
         </section>
       </div>
 
@@ -1493,6 +1853,8 @@
 
   function renderLearner() {
     renderHero();
+    const learnerChip = document.getElementById("learner-display-name");
+    if (learnerChip) learnerChip.textContent = app.user?.display_name || "泡面侠";
     document.querySelectorAll(".mq-nav button").forEach((button) => {
       button.classList.toggle("active", button.dataset.view === app.learnerView);
     });
@@ -1518,6 +1880,9 @@
 
     const proofForm = document.getElementById("proof-form");
     if (proofForm) proofForm.addEventListener("submit", submitProof);
+    document.querySelectorAll("[data-bonus-task-id]").forEach((form) => {
+      form.addEventListener("submit", handleBonusSubmission);
+    });
     const settingsForm = document.getElementById("settings-form");
     if (settingsForm) {
       settingsForm.addEventListener("submit", async (event) => {
@@ -1543,7 +1908,7 @@
     window.setTimeout(() => {
       app.latestStampDate = null;
     }, 500);
-    void maybeAutoCheckin();
+    void maybePromptCheckin();
   }
 
   function adminGroups() {
@@ -1560,6 +1925,10 @@
     const pendingTotal = users.reduce((sum, item) => sum + (item.pending_count || 0), 0);
     const overCount = users.filter((item) => item.recent_days?.[0]?.progressState === "over").length;
     const activeToday = users.filter((item) => item.summary?.lastActiveDate === currentDayKey()).length;
+    const pendingBonus = (app.adminBonusSubmissions || []).filter((item) => item.status === "pending");
+    const latestTasks = (app.adminBonusTasks || []).slice(0, 3)
+      .map((task) => `<div class="mq-proof-note">${escapeHtml(task.title)} · 难度 ${task.difficulty}/5 · ${task.target_days} 天</div>`)
+      .join("");
     document.getElementById("admin-overview").innerHTML = `
       <section class="mq-admin-hero-card">
         <div>
@@ -1573,6 +1942,20 @@
           ${renderMetricCard("今日有动静", `${activeToday} 位`, activeToday ? "green" : "gray")}
           ${renderMetricCard("泡面侠总数", `${users.length} 位`, users.length ? "green" : "gray")}
         </div>
+      </section>
+      <section class="mq-panel-card">
+        <div class="mq-panel-head">
+          <div><p class="mq-panel-kicker">bonus mission desk</p><h2>附加任务发布台</h2></div>
+          <span class="mq-soft-note">${pendingBonus.length ? `${pendingBonus.length} 份附加任务提交正在等你` : "新的附加任务会从这里发出去"}</span>
+        </div>
+        <form id="admin-bonus-form" class="mq-proof-form">
+          <label>任务标题<input name="title" placeholder="例如：把今天最卡的题型做成一页小总结" required></label>
+          <label>目标天数<input name="target_days" type="number" min="1" max="30" value="3" required></label>
+          <label class="wide">任务说明<textarea name="description" rows="3" placeholder="告诉泡面侠这份附加任务想练什么。"></textarea></label>
+          <label>难度<input name="difficulty" type="number" min="1" max="5" value="3" required></label>
+          <div class="wide"><button type="submit" class="mq-primary-btn">发布附加任务</button></div>
+        </form>
+        <div class="mq-bonus-admin-list">${latestTasks || `<div class="mq-empty-card">还没有发布过附加任务。</div>`}</div>
       </section>
     `;
   }
@@ -1644,6 +2027,7 @@
     const historyKeys = Object.keys(state.history || {}).sort((left, right) => right.localeCompare(left));
     const snapshotKey = historyKeys[0] || currentDayKey();
     const day = normalizeDay(state.history[snapshotKey]);
+    const bonusSubmissions = Array.isArray(detail.bonus_submissions) ? detail.bonus_submissions : [];
     const reviewCards = (detail.submissions || []).length
       ? detail.submissions
           .map((item) => {
@@ -1677,6 +2061,37 @@
           })
           .join("")
       : `<div class="mq-empty-card">这位泡面侠暂时还没送来学习证明。</div>`;
+    const bonusCards = bonusSubmissions.length
+      ? bonusSubmissions
+          .map((item) => `
+            <article class="mq-bonus-submission-card">
+              <div class="mq-bonus-top">
+                <strong>${escapeHtml(item.task?.title || "附加任务")}</strong>
+                <span class="mq-proof-badge ${submissionTone(item.status)}">${escapeHtml(submissionStatusLabel(item.status))}</span>
+              </div>
+              <div class="mq-bonus-meta">
+                <span>难度 ${item.task?.difficulty || 1}/5 · 建议 ${item.task?.target_days || 3} 天</span>
+                <span>${item.reward_total ? `+${item.reward_total} 块泡面` : "等待结算"}</span>
+              </div>
+              ${item.note ? `<div class="mq-proof-note">${escapeHtml(item.note)}</div>` : ""}
+              <div class="mq-proof-actions"><a href="${item.evidence_url}" target="_blank" rel="noreferrer">查看附加任务凭证</a></div>
+              ${
+                item.status === "pending"
+                  ? `
+                    <div class="mq-admin-review-actions">
+                      <input id="bonus-review-note-${item.id}" placeholder="给这份附加任务留一句话（可选）">
+                      <button type="button" class="mq-ghost-btn" data-bonus-review-action="reject" data-bonus-submission-id="${item.id}">再补一点</button>
+                      <button type="button" class="mq-primary-btn" data-bonus-review-action="approve" data-bonus-submission-id="${item.id}">点头通过</button>
+                    </div>
+                  `
+                  : item.admin_note
+                    ? `<div class="mq-proof-note">小和留言：${escapeHtml(item.admin_note)}</div>`
+                    : ""
+              }
+            </article>
+          `)
+          .join("")
+      : `<div class="mq-empty-card">这位泡面侠还没送来附加任务凭证。</div>`;
 
     const recentDays = (summary.recentDays || [])
       .map(
@@ -1685,7 +2100,7 @@
             <strong>${escapeHtml(item.date)}</strong>
             <span>${formatMinutes(item.studyMinutes || 0)} · +${item.xpEarned || 0} 块泡面</span>
             <div class="mq-admin-activity-bar">
-              <div class="mq-admin-activity-fill ${item.progressState === "over" ? "gold" : item.progressState === "goal" ? "green" : ""}" style="width:${Math.min(100, Math.round(((item.studyMinutes || 0) / DAILY_GOAL_MINUTES) * 100))}%"></div>
+              <div class="mq-admin-activity-fill ${item.progressState === "over" ? "gold" : item.progressState === "goal" ? "green" : ""}" style="width:${Math.min(100, Math.round(((item.studyMinutes || 0) / goalMinutesForDate(item.date)) * 100))}%"></div>
             </div>
           </div>
         `,
@@ -1717,7 +2132,11 @@
               ${renderMetricCard("今日泡面", `+${day.xpEarned} 块泡面`, approvedMinutes(day) ? "gold" : "gray")}
               ${renderMetricCard("签到印章", day.checkin.stamped ? `${day.checkin.emoji} ${day.checkin.label || ""}` : "未盖章", day.checkin.rewardXp ? "green" : "gray")}
             </div>
-            <div class="mq-task-grid compact">${renderTaskButtons(day)}</div>
+            <div class="mq-story-list">
+              <div class="mq-story-line">今日目标：${day.status.goalMinutes || goalMinutesForDate(snapshotKey)} 分钟</div>
+              <div class="mq-story-line">签到留言：${escapeHtml(day.checkin.moodNote || "还没有写")}</div>
+              <div class="mq-story-line">进步留言：${escapeHtml(day.checkin.progressNote || "还没有写")}</div>
+            </div>
           </section>
 
           <section class="mq-panel-card">
@@ -1746,15 +2165,26 @@
           </div>
           <div class="mq-admin-review-list">${reviewCards}</div>
         </section>
+
+        <section class="mq-panel-card">
+          <div class="mq-panel-head">
+            <div><p class="mq-panel-kicker">bonus review</p><h2>附加任务处理台</h2></div>
+          </div>
+          <div class="mq-admin-review-list">${bonusCards}</div>
+        </section>
       </section>
     `;
   }
 
   function renderAdmin() {
+    const adminChip = document.getElementById("admin-display-name");
+    if (adminChip) adminChip.textContent = app.user?.display_name || "小和";
     renderAdminOverview();
     renderAdminQueue();
     renderAdminUserTabs();
     renderAdminFocus();
+    const bonusForm = document.getElementById("admin-bonus-form");
+    if (bonusForm) bonusForm.addEventListener("submit", handleCreateBonusTask);
   }
 
   async function handleAdminReview(action, submissionId) {
@@ -1769,6 +2199,72 @@
       showToast(action === "approve" ? "小和赞许了你的工作！" : "已经请对方再补一点证明啦");
     } catch (error) {
       showToast(error.payload?.error || "处理失败", "error");
+    }
+  }
+
+  async function handleAdminBonusReview(action, submissionId) {
+    const noteInput = document.getElementById(`bonus-review-note-${submissionId}`);
+    const adminNote = noteInput ? noteInput.value.trim() : "";
+    try {
+      await api(`/api/admin/bonus-task-submissions/${submissionId}/review`, {
+        method: "POST",
+        body: { action, admin_note: adminNote },
+      });
+      await refreshAdminBundle(true);
+      showToast(action === "approve" ? "小和给这份附加任务发了很多泡面！" : "小和想让这份附加任务再补一点");
+    } catch (error) {
+      showToast(error.payload?.error || "处理失败", "error");
+    }
+  }
+
+  async function handleCreateBonusTask(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    try {
+      await api("/api/admin/bonus-tasks", {
+        method: "POST",
+        body: {
+          title: form.title.value.trim(),
+          description: form.description.value.trim(),
+          difficulty: clampInt(form.difficulty.value, 1, 5, 1),
+          target_days: clampInt(form.target_days.value, 1, 30, 3),
+        },
+      });
+      form.reset();
+      form.target_days.value = "3";
+      form.difficulty.value = "3";
+      await refreshAdminBundle(true);
+      showToast("新的附加任务已经发出去了");
+    } catch (error) {
+      showToast(error.payload?.error || "发布失败", "error");
+    }
+  }
+
+  async function handleBonusSubmission(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const taskId = clampInt(form.dataset.bonusTaskId, 1, 10000000, 0);
+    const file = form.evidence.files?.[0];
+    if (!file) {
+      showToast("附加任务也要附上凭证", "error");
+      return;
+    }
+    try {
+      const evidenceData = await fileToDataUrl(file);
+      await api("/api/bonus-task-submissions", {
+        method: "POST",
+        body: {
+          task_id: taskId,
+          completed_date_key: currentDayKey(),
+          note: form.note.value.trim(),
+          evidence_name: file.name || "proof",
+          evidence_data: evidenceData,
+        },
+      });
+      await refreshLearnerBundle(true);
+      showToast("附加任务已经送去给小和啦");
+    } catch (error) {
+      showToast(error.payload?.error || "提交失败", "error");
     }
   }
 
@@ -1802,6 +2298,8 @@
     document.getElementById("register-form").addEventListener("submit", handleRegister);
     document.getElementById("logout-btn").addEventListener("click", () => void handleLogout());
     document.getElementById("admin-logout-btn").addEventListener("click", () => void handleLogout());
+    document.getElementById("checkin-form").addEventListener("submit", submitCheckin);
+    document.getElementById("checkin-later-btn").addEventListener("click", closeCheckinModal);
     document.querySelector(".mq-nav").addEventListener("click", (event) => {
       const button = event.target.closest("[data-view]");
       if (!button) return;
@@ -1811,17 +2309,6 @@
 
     const learnerRoot = document.getElementById("learner-app");
     learnerRoot.addEventListener("click", (event) => {
-      const taskButton = event.target.closest("[data-task]");
-      if (taskButton) {
-        const day = ensureDay();
-        const key = taskButton.dataset.task;
-        day.tasks[key] = !day.tasks[key];
-        renderLearner();
-        scheduleSave();
-        void maybeAutoCheckin();
-        return;
-      }
-
       const scoreButton = event.target.closest("[data-score-field]");
       if (scoreButton) {
         const field = scoreButton.dataset.scoreField;
@@ -1874,10 +2361,18 @@
     });
     document.getElementById("admin-focus").addEventListener("click", (event) => {
       const actionButton = event.target.closest("[data-review-action]");
-      if (!actionButton) return;
-      const action = actionButton.dataset.reviewAction;
-      const submissionId = clampInt(actionButton.dataset.submissionId, 0, 10000000, 0);
-      void handleAdminReview(action, submissionId);
+      if (actionButton) {
+        const action = actionButton.dataset.reviewAction;
+        const submissionId = clampInt(actionButton.dataset.submissionId, 0, 10000000, 0);
+        void handleAdminReview(action, submissionId);
+        return;
+      }
+      const bonusAction = event.target.closest("[data-bonus-review-action]");
+      if (!bonusAction) return;
+      void handleAdminBonusReview(
+        bonusAction.dataset.bonusReviewAction,
+        clampInt(bonusAction.dataset.bonusSubmissionId, 0, 10000000, 0),
+      );
     });
   }
 

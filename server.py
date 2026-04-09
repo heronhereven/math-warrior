@@ -25,6 +25,7 @@ MAX_BODY_BYTES = 2 * 1024 * 1024
 MAX_EVIDENCE_BYTES = 5 * 1024 * 1024
 PBKDF2_ROUNDS = 120_000
 DAILY_GOAL_MINUTES = 120
+WEEKEND_GOAL_MINUTES = 180
 LEVELS = [
     {"level": 1, "name": "新手学徒", "xp": 0},
     {"level": 2, "name": "初级探索者", "xp": 100},
@@ -51,6 +52,7 @@ JOURNAL_XP = 22
 GOAL_BONUS_XP = 46
 OVERACHIEVE_BONUS_XP = 36
 STAMP_REWARD_BASE = 14
+BONUS_TASK_BASE_REWARD = 80
 DATE_KEY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -81,6 +83,8 @@ def default_day() -> dict[str, Any]:
             "rarity": 0,
             "label": "",
             "stampedAt": None,
+            "moodNote": "",
+            "progressNote": "",
             "comboBonusXp": 0,
             "comboDays": 0,
             "rewardXp": 0,
@@ -128,6 +132,13 @@ def normalize_date_key(value: Any, *, default_to_today: bool = True) -> str:
     return text
 
 
+def goal_minutes_for_date_key(date_key: str) -> int:
+    parsed = parse_date_key(date_key)
+    if parsed is None:
+        return DAILY_GOAL_MINUTES
+    return WEEKEND_GOAL_MINUTES if parsed.weekday() >= 5 else DAILY_GOAL_MINUTES
+
+
 def default_checkin() -> dict[str, Any]:
     return default_day()["checkin"].copy()
 
@@ -141,6 +152,10 @@ def normalize_checkin(raw: Any) -> dict[str, Any]:
     base["emoji"] = emoji if isinstance(emoji, str) else ""
     label = raw.get("label", "")
     base["label"] = label if isinstance(label, str) else ""
+    mood_note = raw.get("moodNote", "")
+    base["moodNote"] = mood_note if isinstance(mood_note, str) else ""
+    progress_note = raw.get("progressNote", "")
+    base["progressNote"] = progress_note if isinstance(progress_note, str) else ""
     base["rarity"] = clamp_int(raw.get("rarity"), 0, 10, 0)
     stamped_at = raw.get("stampedAt")
     base["stampedAt"] = stamped_at if isinstance(stamped_at, str) else None
@@ -253,6 +268,49 @@ def build_submission_rollup(rows: list[sqlite3.Row]) -> dict[str, dict[str, int]
     return rollup
 
 
+def build_bonus_rollup(rows: list[sqlite3.Row]) -> dict[str, dict[str, Any]]:
+    rollup: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        date_key = row["date_key"]
+        bucket = rollup.setdefault(
+            date_key,
+            {
+                "reward_total": 0,
+                "approved_count": 0,
+                "pending_count": 0,
+                "latest_title": "",
+            },
+        )
+        status = row["status"]
+        if status == "approved":
+            bucket["reward_total"] += clamp_int(row["reward_total"], 0, 1_000_000, 0)
+            bucket["approved_count"] += 1
+            bucket["latest_title"] = row["title"] or bucket["latest_title"]
+        elif status == "pending":
+            bucket["pending_count"] += 1
+    return rollup
+
+
+def compute_bonus_reward(difficulty: int, target_days: int, created_at: str, submitted_at: str) -> tuple[int, str, float]:
+    try:
+        created = datetime.fromisoformat(created_at)
+        submitted = datetime.fromisoformat(submitted_at)
+        elapsed_days = max(0.0, (submitted - created).total_seconds() / 86400.0)
+    except ValueError:
+        elapsed_days = float(target_days)
+    if elapsed_days <= max(0.5, target_days * 0.5):
+        tier = "闪电完成"
+        multiplier = 1.8
+    elif elapsed_days <= target_days:
+        tier = "稳稳拿下"
+        multiplier = 1.35
+    else:
+        tier = "坚持完成"
+        multiplier = 1.0
+    reward = int(round((BONUS_TASK_BASE_REWARD + difficulty * 35) * multiplier))
+    return reward, tier, multiplier
+
+
 def checkin_combo_days(history: dict[str, Any], date_key: str) -> int:
     day = history.get(date_key, {})
     current = normalize_checkin(day.get("checkin"))
@@ -273,45 +331,53 @@ def checkin_combo_days(history: dict[str, Any], date_key: str) -> int:
     return combo
 
 
-def compute_stamp_reward(rarity: int, combo_days: int, approved_minutes: int) -> tuple[int, int]:
-    if rarity <= 0 or approved_minutes < DAILY_GOAL_MINUTES:
+def compute_stamp_reward(rarity: int, combo_days: int, approved_minutes: int, goal_minutes: int) -> tuple[int, int]:
+    if rarity <= 0 or approved_minutes < goal_minutes:
         return 0, combo_days
     base_reward = STAMP_REWARD_BASE * rarity
     combo_bonus = 0
     if combo_days > 1:
         combo_bonus = base_reward * (2 ** (combo_days - 1))
-    if approved_minutes > DAILY_GOAL_MINUTES:
+    if approved_minutes > goal_minutes:
         base_reward = int(round(base_reward * 1.4))
         combo_bonus = int(round(combo_bonus * 1.25))
     return base_reward + combo_bonus, combo_bonus
 
 
-def compute_progress_state(approved_minutes: int) -> str:
+def compute_progress_state(approved_minutes: int, goal_minutes: int) -> str:
     if approved_minutes <= 0:
         return "locked"
-    if approved_minutes > DAILY_GOAL_MINUTES:
+    if approved_minutes > goal_minutes:
         return "over"
-    if approved_minutes >= DAILY_GOAL_MINUTES:
+    if approved_minutes >= goal_minutes:
         return "goal"
     return "growing"
 
 
-def compute_reward_state(day: dict[str, Any], approved_minutes: int, pending_minutes: int) -> str:
+def compute_reward_state(day: dict[str, Any], approved_minutes: int, pending_minutes: int, goal_minutes: int) -> str:
     checkin = normalize_checkin(day.get("checkin"))
     if not checkin["stamped"]:
         return "idle"
-    if approved_minutes > DAILY_GOAL_MINUTES:
+    if approved_minutes > goal_minutes:
         return "over"
-    if approved_minutes >= DAILY_GOAL_MINUTES:
+    if approved_minutes >= goal_minutes:
         return "earned"
     if pending_minutes > 0:
         return "pending"
     return "muted"
 
 
-def finalize_state(state: dict[str, Any], submission_rollup: dict[str, dict[str, int]]) -> dict[str, Any]:
+def finalize_state(
+    state: dict[str, Any],
+    submission_rollup: dict[str, dict[str, int]],
+    bonus_rollup: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     merged = normalize_state(state)
+    bonus_rollup = bonus_rollup or {}
     for date_key in submission_rollup:
+        if date_key not in merged["history"]:
+            merged["history"][date_key] = default_day()
+    for date_key in bonus_rollup:
         if date_key not in merged["history"]:
             merged["history"][date_key] = default_day()
 
@@ -322,6 +388,7 @@ def finalize_state(state: dict[str, Any], submission_rollup: dict[str, dict[str,
 
     for date_key in sorted_keys:
         day = normalize_day(merged["history"][date_key])
+        goal_minutes = goal_minutes_for_date_key(date_key)
         submission = submission_rollup.get(
             date_key,
             {
@@ -336,39 +403,42 @@ def finalize_state(state: dict[str, Any], submission_rollup: dict[str, dict[str,
         approved_minutes = clamp_int(submission["approved_minutes"], 0, 720, 0)
         pending_minutes = clamp_int(submission["pending_minutes"], 0, 720, 0)
         rejected_minutes = clamp_int(submission["rejected_minutes"], 0, 720, 0)
+        bonus_info = bonus_rollup.get(date_key, {"reward_total": 0, "approved_count": 0, "pending_count": 0, "latest_title": ""})
         checkin = normalize_checkin(day.get("checkin"))
         combo_days = checkin_combo_days(merged["history"], date_key) if checkin["stamped"] else 0
-        reward_xp, combo_bonus_xp = compute_stamp_reward(checkin["rarity"], combo_days, approved_minutes)
+        reward_xp, combo_bonus_xp = compute_stamp_reward(checkin["rarity"], combo_days, approved_minutes, goal_minutes)
         checkin["comboDays"] = combo_days
         checkin["comboBonusXp"] = combo_bonus_xp
         checkin["rewardXp"] = reward_xp
         day["checkin"] = checkin
         day["segments"] = collapse_minutes_to_segments(approved_minutes)
         day["status"] = {
-            "goalMinutes": DAILY_GOAL_MINUTES,
+            "goalMinutes": goal_minutes,
             "approvedMinutes": approved_minutes,
             "pendingMinutes": pending_minutes,
             "rejectedMinutes": rejected_minutes,
             "approvedCount": clamp_int(submission["approved_count"], 0, 10_000, 0),
             "pendingCount": clamp_int(submission["pending_count"], 0, 10_000, 0),
             "rejectedCount": clamp_int(submission["rejected_count"], 0, 10_000, 0),
-            "progressState": compute_progress_state(approved_minutes),
-            "rewardState": compute_reward_state(day, approved_minutes, pending_minutes),
+            "progressState": compute_progress_state(approved_minutes, goal_minutes),
+            "rewardState": compute_reward_state(day, approved_minutes, pending_minutes, goal_minutes),
+            "bonusReward": clamp_int(bonus_info.get("reward_total"), 0, 1_000_000, 0),
+            "bonusApprovedCount": clamp_int(bonus_info.get("approved_count"), 0, 1_000, 0),
+            "bonusPendingCount": clamp_int(bonus_info.get("pending_count"), 0, 1_000, 0),
+            "bonusLatestTitle": bonus_info.get("latest_title", ""),
         }
 
         xp = 0
         if approved_minutes > 0:
             xp = compute_study_xp(approved_minutes)
-            for task_key, task_xp in TASK_XP.items():
-                if day["tasks"].get(task_key):
-                    xp += task_xp
-            if any((day["journal"].get(key, "").strip() for key in ("top", "stuck", "feel"))):
+            if any((checkin.get(key, "").strip() for key in ("moodNote", "progressNote"))):
                 xp += JOURNAL_XP
-            if approved_minutes >= DAILY_GOAL_MINUTES and all(day["tasks"].values()):
+            if approved_minutes >= goal_minutes:
                 xp += GOAL_BONUS_XP
-            if approved_minutes > DAILY_GOAL_MINUTES:
+            if approved_minutes > goal_minutes:
                 xp += OVERACHIEVE_BONUS_XP
             xp += reward_xp
+        xp += clamp_int(bonus_info.get("reward_total"), 0, 1_000_000, 0)
         day["xpEarned"] = xp
         merged["history"][date_key] = day
         total_xp += xp
@@ -413,6 +483,7 @@ def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
                 "stuck": day.get("journal", {}).get("stuck", ""),
                 "progressState": day.get("status", {}).get("progressState", "locked"),
                 "rewardState": day.get("status", {}).get("rewardState", "idle"),
+                "bonusReward": clamp_int(day.get("status", {}).get("bonusReward"), 0, 1_000_000, 0),
             }
         )
         if len(recent_days) >= 7:
@@ -515,6 +586,40 @@ class MathQuestApp:
                     reviewed_by INTEGER,
                     reviewed_at TEXT,
                     created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(reviewed_by) REFERENCES users(id) ON DELETE SET NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS bonus_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    difficulty INTEGER NOT NULL DEFAULT 1,
+                    target_days INTEGER NOT NULL DEFAULT 3,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_by INTEGER,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS bonus_task_submissions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    completed_date_key TEXT NOT NULL,
+                    note TEXT NOT NULL DEFAULT '',
+                    evidence_name TEXT NOT NULL,
+                    evidence_mime TEXT NOT NULL,
+                    evidence_path TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    admin_note TEXT NOT NULL DEFAULT '',
+                    reviewed_by INTEGER,
+                    reviewed_at TEXT,
+                    created_at TEXT NOT NULL,
+                    reward_total INTEGER NOT NULL DEFAULT 0,
+                    speed_tier TEXT NOT NULL DEFAULT '',
+                    speed_multiplier REAL NOT NULL DEFAULT 1.0,
+                    FOREIGN KEY(task_id) REFERENCES bonus_tasks(id) ON DELETE CASCADE,
                     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY(reviewed_by) REFERENCES users(id) ON DELETE SET NULL
                 );
@@ -682,8 +787,24 @@ class MathQuestApp:
         ).fetchall()
         return build_submission_rollup(rows)
 
+    def _bonus_reward_rollup(self, conn: sqlite3.Connection, user_id: int) -> dict[str, dict[str, Any]]:
+        rows = conn.execute(
+            """
+            SELECT
+                bonus_task_submissions.completed_date_key AS date_key,
+                bonus_task_submissions.status,
+                bonus_task_submissions.reward_total,
+                bonus_tasks.title
+            FROM bonus_task_submissions
+            JOIN bonus_tasks ON bonus_tasks.id = bonus_task_submissions.task_id
+            WHERE bonus_task_submissions.user_id = ?
+            """,
+            (user_id,),
+        ).fetchall()
+        return build_bonus_rollup(rows)
+
     def _hydrate_user_state(self, conn: sqlite3.Connection, user_id: int, state: dict[str, Any]) -> dict[str, Any]:
-        return finalize_state(state, self._submission_rollup(conn, user_id))
+        return finalize_state(state, self._submission_rollup(conn, user_id), self._bonus_reward_rollup(conn, user_id))
 
     def _load_user_state(self, conn: sqlite3.Connection, user_id: int) -> dict[str, Any]:
         return self._hydrate_user_state(conn, user_id, self._load_raw_user_state(conn, user_id))
@@ -701,10 +822,26 @@ class MathQuestApp:
             merged["history"][date_key] = existing_day
         return merged
 
-    def _upsert_checkin(self, conn: sqlite3.Connection, user_id: int, date_key: str) -> dict[str, Any]:
+    def _upsert_checkin(
+        self,
+        conn: sqlite3.Connection,
+        user_id: int,
+        date_key: str,
+        *,
+        mood_note: str = "",
+        progress_note: str = "",
+    ) -> dict[str, Any]:
         raw_state = self._load_raw_user_state(conn, user_id)
         history = raw_state.setdefault("history", {})
         day = normalize_day(history.get(date_key))
+        submission_rollup = self._submission_rollup(conn, user_id)
+        today_rollup = submission_rollup.get(date_key, {})
+        goal_minutes = goal_minutes_for_date_key(date_key)
+        eligible_minutes = clamp_int(today_rollup.get("approved_minutes"), 0, 720, 0) + clamp_int(
+            today_rollup.get("pending_minutes"), 0, 720, 0
+        )
+        if eligible_minutes < goal_minutes:
+            raise ValueError("完成当日目标时长对应的学习提交后，才可以盖章")
         if day["checkin"]["stamped"]:
             self._save_raw_user_state(conn, user_id, raw_state)
             return self._hydrate_user_state(conn, user_id, raw_state)
@@ -724,10 +861,14 @@ class MathQuestApp:
             "rarity": picked["rarity"],
             "label": picked["label"],
             "stampedAt": utc_now_iso(),
+            "moodNote": mood_note[:120],
+            "progressNote": progress_note[:120],
             "comboBonusXp": 0,
             "comboDays": 1,
             "rewardXp": 0,
         }
+        day["journal"]["feel"] = mood_note[:200]
+        day["journal"]["top"] = progress_note[:200]
         history[date_key] = day
         saved = self._save_raw_user_state(conn, user_id, raw_state)
         return self._hydrate_user_state(conn, user_id, saved)
@@ -782,6 +923,52 @@ class MathQuestApp:
             }
         return item
 
+    def _format_bonus_task(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "description": row["description"],
+            "difficulty": row["difficulty"],
+            "target_days": row["target_days"],
+            "active": bool(row["active"]),
+            "created_at": row["created_at"],
+        }
+
+    def _format_bonus_submission(self, row: sqlite3.Row, include_user: bool = False) -> dict[str, Any]:
+        item = {
+            "id": row["id"],
+            "task_id": row["task_id"],
+            "user_id": row["user_id"],
+            "completed_date_key": row["completed_date_key"],
+            "note": row["note"],
+            "status": row["status"],
+            "admin_note": row["admin_note"],
+            "created_at": row["created_at"],
+            "reviewed_at": row["reviewed_at"],
+            "reward_total": row["reward_total"],
+            "speed_tier": row["speed_tier"],
+            "speed_multiplier": row["speed_multiplier"],
+            "evidence_name": row["evidence_name"],
+            "evidence_mime": row["evidence_mime"],
+            "evidence_url": f"/api/bonus-task-submissions/{row['id']}/evidence",
+            "task": {
+                "id": row["task_id"],
+                "title": row["title"],
+                "description": row["description"],
+                "difficulty": row["difficulty"],
+                "target_days": row["target_days"],
+                "active": bool(row["active"]),
+            },
+        }
+        if include_user:
+            item["user"] = {
+                "id": row["user_id"],
+                "username": row["username"],
+                "display_name": row["display_name"],
+                "is_admin": bool(row["is_admin"]),
+            }
+        return item
+
     def _list_submissions(
         self,
         conn: sqlite3.Connection,
@@ -813,6 +1000,54 @@ class MathQuestApp:
         params.append(limit)
         rows = conn.execute("\n".join(sql), params).fetchall()
         return [self._format_submission(row, include_user=include_user) for row in rows]
+
+    def _list_bonus_tasks(self, conn: sqlite3.Connection, *, active_only: bool = False) -> list[dict[str, Any]]:
+        sql = ["SELECT * FROM bonus_tasks WHERE 1 = 1"]
+        params: list[Any] = []
+        if active_only:
+            sql.append("AND active = 1")
+        sql.append("ORDER BY active DESC, created_at DESC, id DESC")
+        rows = conn.execute("\n".join(sql), params).fetchall()
+        return [self._format_bonus_task(row) for row in rows]
+
+    def _list_bonus_submissions(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        user_id: int | None = None,
+        status: str | None = None,
+        include_user: bool = False,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        sql = [
+            """
+            SELECT
+                bonus_task_submissions.*,
+                bonus_tasks.title,
+                bonus_tasks.description,
+                bonus_tasks.difficulty,
+                bonus_tasks.target_days,
+                bonus_tasks.active,
+                users.username,
+                users.display_name,
+                users.is_admin
+            FROM bonus_task_submissions
+            JOIN bonus_tasks ON bonus_tasks.id = bonus_task_submissions.task_id
+            JOIN users ON users.id = bonus_task_submissions.user_id
+            WHERE 1 = 1
+            """
+        ]
+        params: list[Any] = []
+        if user_id is not None:
+            sql.append("AND bonus_task_submissions.user_id = ?")
+            params.append(user_id)
+        if status is not None:
+            sql.append("AND bonus_task_submissions.status = ?")
+            params.append(status)
+        sql.append("ORDER BY bonus_task_submissions.created_at DESC, bonus_task_submissions.id DESC LIMIT ?")
+        params.append(limit)
+        rows = conn.execute("\n".join(sql), params).fetchall()
+        return [self._format_bonus_submission(row, include_user=include_user) for row in rows]
 
     def _validate_registration(self, body: dict[str, Any]) -> tuple[str, str, str]:
         username = str(body.get("username", "")).strip()
@@ -902,6 +1137,17 @@ class MathQuestApp:
                             submissions = app._list_submissions(conn, user_id=user["id"], limit=100)
                         app._send_json(self, HTTPStatus.OK, {"submissions": submissions})
                         return
+                    if path == "/api/bonus-tasks":
+                        user = app._auth_user(self)
+                        if not user:
+                            app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
+                            return
+                        with app._connect() as conn:
+                            tasks = app._list_bonus_tasks(conn, active_only=not bool(user["is_admin"]))
+                            submissions = app._list_bonus_submissions(conn, user_id=None if user["is_admin"] else user["id"], include_user=bool(user["is_admin"]), limit=100)
+                            state = app._load_user_state(conn, user["id"])
+                        app._send_json(self, HTTPStatus.OK, {"tasks": tasks, "submissions": submissions, "state": state})
+                        return
                     if path.startswith("/api/submissions/") and path.endswith("/evidence"):
                         user = app._auth_user(self)
                         if not user:
@@ -934,6 +1180,40 @@ class MathQuestApp:
                             app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "凭证文件不存在"})
                             return
 
+                        payload = evidence_path.read_bytes()
+                        self.send_response(HTTPStatus.OK)
+                        self.send_header("Content-Type", row["evidence_mime"] or "application/octet-stream")
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("Content-Length", str(len(payload)))
+                        self.end_headers()
+                        self.wfile.write(payload)
+                        return
+                    if path.startswith("/api/bonus-task-submissions/") and path.endswith("/evidence"):
+                        user = app._auth_user(self)
+                        if not user:
+                            app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
+                            return
+                        parts = path.strip("/").split("/")
+                        if len(parts) != 4:
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
+                            return
+                        try:
+                            submission_id = int(parts[2])
+                        except ValueError:
+                            app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "提交 ID 无效"})
+                            return
+                        with app._connect() as conn:
+                            row = conn.execute("SELECT * FROM bonus_task_submissions WHERE id = ?", (submission_id,)).fetchone()
+                        if row is None:
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "提交不存在"})
+                            return
+                        if row["user_id"] != user["id"] and not user["is_admin"]:
+                            app._send_json(self, HTTPStatus.FORBIDDEN, {"error": "无权查看该凭证"})
+                            return
+                        evidence_path = app.upload_dir / row["evidence_path"]
+                        if not evidence_path.exists():
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "凭证文件不存在"})
+                            return
                         payload = evidence_path.read_bytes()
                         self.send_response(HTTPStatus.OK)
                         self.send_header("Content-Type", row["evidence_mime"] or "application/octet-stream")
@@ -1021,6 +1301,7 @@ class MathQuestApp:
                         with app._connect() as conn:
                             state = app._load_user_state(conn, row["id"])
                             submissions = app._list_submissions(conn, user_id=row["id"], limit=30)
+                            bonus_submissions = app._list_bonus_submissions(conn, user_id=row["id"], include_user=True, limit=30)
                         app._send_json(
                             self,
                             HTTPStatus.OK,
@@ -1029,8 +1310,23 @@ class MathQuestApp:
                                 "summary": summarize_state(state),
                                 "state": state,
                                 "submissions": submissions,
+                                "bonus_submissions": bonus_submissions,
                             },
                         )
+                        return
+
+                    if path == "/api/admin/bonus-tasks":
+                        user = app._auth_user(self)
+                        if not user:
+                            app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
+                            return
+                        if not user["is_admin"]:
+                            app._send_json(self, HTTPStatus.FORBIDDEN, {"error": "需要管理员权限"})
+                            return
+                        with app._connect() as conn:
+                            tasks = app._list_bonus_tasks(conn, active_only=False)
+                            submissions = app._list_bonus_submissions(conn, include_user=True, limit=100)
+                        app._send_json(self, HTTPStatus.OK, {"tasks": tasks, "submissions": submissions})
                         return
 
                     app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
@@ -1173,7 +1469,13 @@ class MathQuestApp:
                         body = app._read_json(self)
                         date_key = normalize_date_key(body.get("date_key"))
                         with app._connect() as conn:
-                            state = app._upsert_checkin(conn, user["id"], date_key)
+                            state = app._upsert_checkin(
+                                conn,
+                                user["id"],
+                                date_key,
+                                mood_note=str(body.get("mood_note", "")).strip()[:120],
+                                progress_note=str(body.get("progress_note", "")).strip()[:120],
+                            )
                         day = state["history"].get(date_key, default_day())
                         app._send_json(
                             self,
@@ -1185,6 +1487,93 @@ class MathQuestApp:
                                 "state": state,
                             },
                         )
+                        return
+
+                    if path == "/api/bonus-task-submissions":
+                        user = app._auth_user(self)
+                        if not user:
+                            app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
+                            return
+                        if user["is_admin"]:
+                            app._send_json(self, HTTPStatus.FORBIDDEN, {"error": "小和不会在这里提交附加任务"})
+                            return
+                        body = app._read_json(self)
+                        task_id = clamp_int(body.get("task_id"), 1, 10_000_000, 0)
+                        note = str(body.get("note", "")).strip()[:500]
+                        completed_date_key = normalize_date_key(body.get("completed_date_key"))
+                        payload_bytes, evidence_name, evidence_mime = app._decode_evidence_payload(body)
+                        evidence_path = app._store_evidence_file(payload_bytes, evidence_name, evidence_mime)
+                        now = utc_now_iso()
+                        with app._connect() as conn:
+                            state = app._load_user_state(conn, user["id"])
+                            day = normalize_day(state["history"].get(completed_date_key))
+                            if not day["checkin"]["stamped"]:
+                                app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "盖章之后才会解锁附加任务"})
+                                return
+                            task = conn.execute("SELECT * FROM bonus_tasks WHERE id = ? AND active = 1", (task_id,)).fetchone()
+                            if task is None:
+                                app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "附加任务不存在"})
+                                return
+                            cur = conn.execute(
+                                """
+                                INSERT INTO bonus_task_submissions (
+                                    task_id, user_id, completed_date_key, note, evidence_name, evidence_mime, evidence_path, status, created_at
+                                )
+                                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                                """,
+                                (task_id, user["id"], completed_date_key, note, evidence_name, evidence_mime, evidence_path, now),
+                            )
+                            app._touch_sync_signal()
+                            row = conn.execute(
+                                """
+                                SELECT
+                                    bonus_task_submissions.*,
+                                    bonus_tasks.title,
+                                    bonus_tasks.description,
+                                    bonus_tasks.difficulty,
+                                    bonus_tasks.target_days,
+                                    bonus_tasks.active,
+                                    users.username,
+                                    users.display_name,
+                                    users.is_admin
+                                FROM bonus_task_submissions
+                                JOIN bonus_tasks ON bonus_tasks.id = bonus_task_submissions.task_id
+                                JOIN users ON users.id = bonus_task_submissions.user_id
+                                WHERE bonus_task_submissions.id = ?
+                                """,
+                                (cur.lastrowid,),
+                            ).fetchone()
+                        app._send_json(self, HTTPStatus.CREATED, {"submission": app._format_bonus_submission(row)})
+                        return
+
+                    if path == "/api/admin/bonus-tasks":
+                        user = app._auth_user(self)
+                        if not user:
+                            app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
+                            return
+                        if not user["is_admin"]:
+                            app._send_json(self, HTTPStatus.FORBIDDEN, {"error": "需要管理员权限"})
+                            return
+                        body = app._read_json(self)
+                        title = str(body.get("title", "")).strip()[:80]
+                        description = str(body.get("description", "")).strip()[:500]
+                        difficulty = clamp_int(body.get("difficulty"), 1, 5, 1)
+                        target_days = clamp_int(body.get("target_days"), 1, 30, 3)
+                        if not title:
+                            app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "附加任务要有标题"})
+                            return
+                        now = utc_now_iso()
+                        with app._connect() as conn:
+                            cur = conn.execute(
+                                """
+                                INSERT INTO bonus_tasks (title, description, difficulty, target_days, active, created_by, created_at)
+                                VALUES (?, ?, ?, ?, 1, ?, ?)
+                                """,
+                                (title, description, difficulty, target_days, user["id"], now),
+                            )
+                            app._touch_sync_signal()
+                            row = conn.execute("SELECT * FROM bonus_tasks WHERE id = ?", (cur.lastrowid,)).fetchone()
+                        app._send_json(self, HTTPStatus.CREATED, {"task": app._format_bonus_task(row)})
                         return
 
                     if path.startswith("/api/admin/submissions/") and path.endswith("/review"):
@@ -1236,6 +1625,94 @@ class MathQuestApp:
                                 (submission_id,),
                             ).fetchone()
                         app._send_json(self, HTTPStatus.OK, {"submission": app._format_submission(row, include_user=True)})
+                        return
+
+                    if path.startswith("/api/admin/bonus-task-submissions/") and path.endswith("/review"):
+                        user = app._auth_user(self)
+                        if not user:
+                            app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
+                            return
+                        if not user["is_admin"]:
+                            app._send_json(self, HTTPStatus.FORBIDDEN, {"error": "需要管理员权限"})
+                            return
+                        parts = path.strip("/").split("/")
+                        if len(parts) != 5:
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
+                            return
+                        try:
+                            submission_id = int(parts[3])
+                        except ValueError:
+                            app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "提交 ID 无效"})
+                            return
+                        body = app._read_json(self)
+                        action = str(body.get("action", "")).strip().lower()
+                        if action not in {"approve", "reject"}:
+                            app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "action 只能是 approve 或 reject"})
+                            return
+                        admin_note = str(body.get("admin_note", "")).strip()[:500]
+                        reviewed_at = utc_now_iso()
+                        with app._connect() as conn:
+                            row = conn.execute(
+                                """
+                                SELECT bonus_task_submissions.*, bonus_tasks.difficulty, bonus_tasks.target_days, bonus_tasks.created_at AS task_created_at
+                                FROM bonus_task_submissions
+                                JOIN bonus_tasks ON bonus_tasks.id = bonus_task_submissions.task_id
+                                WHERE bonus_task_submissions.id = ?
+                                """,
+                                (submission_id,),
+                            ).fetchone()
+                            if row is None:
+                                app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "提交不存在"})
+                                return
+                            reward_total = 0
+                            speed_tier = ""
+                            speed_multiplier = 1.0
+                            status_value = "approved" if action == "approve" else "rejected"
+                            if status_value == "approved":
+                                reward_total, speed_tier, speed_multiplier = compute_bonus_reward(
+                                    row["difficulty"],
+                                    row["target_days"],
+                                    row["task_created_at"],
+                                    row["created_at"],
+                                )
+                            conn.execute(
+                                """
+                                UPDATE bonus_task_submissions
+                                SET status = ?, admin_note = ?, reviewed_by = ?, reviewed_at = ?, reward_total = ?, speed_tier = ?, speed_multiplier = ?
+                                WHERE id = ?
+                                """,
+                                (
+                                    status_value,
+                                    admin_note,
+                                    user["id"],
+                                    reviewed_at,
+                                    reward_total,
+                                    speed_tier,
+                                    speed_multiplier,
+                                    submission_id,
+                                ),
+                            )
+                            app._touch_sync_signal()
+                            refreshed = conn.execute(
+                                """
+                                SELECT
+                                    bonus_task_submissions.*,
+                                    bonus_tasks.title,
+                                    bonus_tasks.description,
+                                    bonus_tasks.difficulty,
+                                    bonus_tasks.target_days,
+                                    bonus_tasks.active,
+                                    users.username,
+                                    users.display_name,
+                                    users.is_admin
+                                FROM bonus_task_submissions
+                                JOIN bonus_tasks ON bonus_tasks.id = bonus_task_submissions.task_id
+                                JOIN users ON users.id = bonus_task_submissions.user_id
+                                WHERE bonus_task_submissions.id = ?
+                                """,
+                                (submission_id,),
+                            ).fetchone()
+                        app._send_json(self, HTTPStatus.OK, {"submission": app._format_bonus_submission(refreshed, include_user=True)})
                         return
 
                     app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
