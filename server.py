@@ -1,4 +1,6 @@
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import mimetypes
@@ -18,6 +20,7 @@ SESSION_COOKIE = "mq_session"
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{3,24}$")
 PASSWORD_MIN_LENGTH = 6
 MAX_BODY_BYTES = 2 * 1024 * 1024
+MAX_EVIDENCE_BYTES = 5 * 1024 * 1024
 PBKDF2_ROUNDS = 120_000
 LEVELS = [
     {"level": 1, "name": "新手学徒", "xp": 0},
@@ -52,6 +55,7 @@ def default_day() -> dict[str, Any]:
         "energy": 0,
         "xpEarned": 0,
         "rewardShown": False,
+        "checkin": {"stamped": False, "emoji": "", "rarity": 0, "stampedAt": None, "comboBonusXp": 0, "comboDays": 0},
     }
 
 
@@ -66,8 +70,8 @@ def clamp_int(value: Any, minimum: int, maximum: int, fallback: int = 0) -> int:
 def normalize_segment(raw: Any) -> dict[str, int] | None:
     if not isinstance(raw, dict):
         return None
-    start = clamp_int(raw.get("s"), 0, 180, 0)
-    end = clamp_int(raw.get("e"), 0, 180, 0)
+    start = clamp_int(raw.get("s"), 0, 720, 0)
+    end = clamp_int(raw.get("e"), 0, 720, 0)
     if start >= end:
         return None
     return {"s": start, "e": end}
@@ -102,7 +106,22 @@ def normalize_day(raw: Any) -> dict[str, Any]:
     base["energy"] = clamp_int(raw.get("energy"), 0, 5, 0)
     base["xpEarned"] = clamp_int(raw.get("xpEarned"), 0, 100000, 0)
     base["rewardShown"] = bool(raw.get("rewardShown"))
+    checkin_raw = raw.get("checkin", {})
+    if isinstance(checkin_raw, dict):
+        base["checkin"] = {
+            "stamped": bool(checkin_raw.get("stamped")),
+            "emoji": checkin_raw.get("emoji", "") if isinstance(checkin_raw.get("emoji", ""), str) else "",
+            "rarity": clamp_int(checkin_raw.get("rarity"), 0, 10, 0),
+            "stampedAt": checkin_raw.get("stampedAt") if isinstance(checkin_raw.get("stampedAt"), str) else None,
+            "comboBonusXp": clamp_int(checkin_raw.get("comboBonusXp"), 0, 100000, 0),
+            "comboDays": clamp_int(checkin_raw.get("comboDays"), 0, 365, 0),
+        }
     return base
+
+
+def collapse_minutes_to_segments(total_minutes: int) -> list[dict[str, int]]:
+    minutes = clamp_int(total_minutes, 0, 720, 0)
+    return [{"s": 0, "e": minutes}] if minutes > 0 else []
 
 
 def normalize_state(raw: Any) -> dict[str, Any]:
@@ -185,10 +204,12 @@ class MathQuestApp:
         self.db_path = Path(db_path)
         self.static_dir = Path(static_dir)
         self.index_path = self.static_dir / "index.html"
+        self.upload_dir = self.static_dir / "uploads"
         self.host = host
         self.port = port
         self.admin_username = admin_username
         self.admin_password = admin_password
+        self.upload_dir.mkdir(parents=True, exist_ok=True)
         self._init_db()
         self._ensure_admin_user()
 
@@ -228,6 +249,24 @@ class MathQuestApp:
                     created_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL,
                     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS study_submissions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    date_key TEXT NOT NULL,
+                    duration_minutes INTEGER NOT NULL,
+                    note TEXT NOT NULL DEFAULT '',
+                    evidence_name TEXT NOT NULL,
+                    evidence_mime TEXT NOT NULL,
+                    evidence_path TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    admin_note TEXT NOT NULL DEFAULT '',
+                    reviewed_by INTEGER,
+                    reviewed_at TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY(reviewed_by) REFERENCES users(id) ON DELETE SET NULL
                 );
                 """
             )
@@ -360,11 +399,12 @@ class MathQuestApp:
                 "INSERT INTO user_states (user_id, state_json, updated_at) VALUES (?, ?, ?)",
                 (user_id, json.dumps(state, ensure_ascii=False), utc_now_iso()),
             )
-            return state
+            return self._merge_submission_minutes(conn, user_id, state)
         try:
-            return normalize_state(json.loads(row["state_json"]))
+            state = normalize_state(json.loads(row["state_json"]))
         except json.JSONDecodeError:
-            return default_state()
+            state = default_state()
+        return self._merge_submission_minutes(conn, user_id, state)
 
     def _save_user_state(self, conn: sqlite3.Connection, user_id: int, state: dict[str, Any]) -> dict[str, Any]:
         normalized = normalize_state(state)
@@ -378,7 +418,113 @@ class MathQuestApp:
             """,
             (user_id, payload, now),
         )
-        return normalized
+        return self._merge_submission_minutes(conn, user_id, normalized)
+
+    def _merge_submission_minutes(self, conn: sqlite3.Connection, user_id: int, state: dict[str, Any]) -> dict[str, Any]:
+        merged = normalize_state(state)
+        rows = conn.execute(
+            """
+            SELECT date_key, COALESCE(SUM(duration_minutes), 0) AS approved_minutes
+            FROM study_submissions
+            WHERE user_id = ? AND status = 'approved'
+            GROUP BY date_key
+            """,
+            (user_id,),
+        ).fetchall()
+        approved_by_date = {row["date_key"]: clamp_int(row["approved_minutes"], 0, 720, 0) for row in rows}
+
+        for date_key in approved_by_date:
+            if date_key not in merged["history"]:
+                merged["history"][date_key] = default_day()
+
+        for date_key, day in merged["history"].items():
+            if date_key in approved_by_date:
+                day["segments"] = collapse_minutes_to_segments(approved_by_date[date_key])
+
+        merged["totalXp"] = sum(day.get("xpEarned", 0) for day in merged["history"].values())
+        return merged
+
+    def _decode_evidence_payload(self, body: dict[str, Any]) -> tuple[bytes, str, str]:
+        evidence_data = body.get("evidence_data")
+        evidence_name = str(body.get("evidence_name", "")).strip() or "evidence"
+        if not isinstance(evidence_data, str) or not evidence_data.startswith("data:") or ";base64," not in evidence_data:
+            raise ValueError("凭证必须以 base64 data URL 上传")
+        header, encoded = evidence_data.split(",", 1)
+        mime = header[5:].split(";")[0].strip() or "application/octet-stream"
+        try:
+            payload = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("凭证文件编码无效") from exc
+        if not payload:
+            raise ValueError("凭证不能为空")
+        if len(payload) > MAX_EVIDENCE_BYTES:
+            raise ValueError("凭证大小不能超过 5MB")
+        return payload, evidence_name[:120], mime[:120]
+
+    def _store_evidence_file(self, payload: bytes, evidence_name: str, mime: str) -> str:
+        suffix = Path(evidence_name).suffix
+        if not suffix:
+            suffix = mimetypes.guess_extension(mime) or ".bin"
+        filename = f"{secrets.token_hex(16)}{suffix}"
+        path = self.upload_dir / filename
+        path.write_bytes(payload)
+        return filename
+
+    def _format_submission(self, row: sqlite3.Row, include_user: bool = False) -> dict[str, Any]:
+        item = {
+            "id": row["id"],
+            "user_id": row["user_id"],
+            "date_key": row["date_key"],
+            "duration_minutes": row["duration_minutes"],
+            "note": row["note"],
+            "status": row["status"],
+            "admin_note": row["admin_note"],
+            "created_at": row["created_at"],
+            "reviewed_at": row["reviewed_at"],
+            "evidence_name": row["evidence_name"],
+            "evidence_mime": row["evidence_mime"],
+            "evidence_url": f"/api/submissions/{row['id']}/evidence",
+        }
+        if include_user:
+            item["user"] = {
+                "id": row["user_id"],
+                "username": row["username"],
+                "display_name": row["display_name"],
+                "is_admin": bool(row["is_admin"]),
+            }
+        return item
+
+    def _list_submissions(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        user_id: int | None = None,
+        status: str | None = None,
+        include_user: bool = False,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        sql = [
+            """
+            SELECT study_submissions.*,
+                   users.username,
+                   users.display_name,
+                   users.is_admin
+            FROM study_submissions
+            JOIN users ON users.id = study_submissions.user_id
+            WHERE 1 = 1
+            """
+        ]
+        params: list[Any] = []
+        if user_id is not None:
+            sql.append("AND study_submissions.user_id = ?")
+            params.append(user_id)
+        if status is not None:
+            sql.append("AND study_submissions.status = ?")
+            params.append(status)
+        sql.append("ORDER BY study_submissions.created_at DESC, study_submissions.id DESC LIMIT ?")
+        params.append(limit)
+        rows = conn.execute("\n".join(sql), params).fetchall()
+        return [self._format_submission(row, include_user=include_user) for row in rows]
 
     def _validate_registration(self, body: dict[str, Any]) -> tuple[str, str, str]:
         username = str(body.get("username", "")).strip()
@@ -472,6 +618,55 @@ class MathQuestApp:
                             return
                         app._send_json(self, HTTPStatus.OK, {"authenticated": True, "user": app._public_user(user)})
                         return
+                    if path == "/api/submissions/mine":
+                        user = app._auth_user(self)
+                        if not user:
+                            app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
+                            return
+                        with app._connect() as conn:
+                            submissions = app._list_submissions(conn, user_id=user["id"], limit=100)
+                        app._send_json(self, HTTPStatus.OK, {"submissions": submissions})
+                        return
+                    if path.startswith("/api/submissions/") and path.endswith("/evidence"):
+                        user = app._auth_user(self)
+                        if not user:
+                            app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
+                            return
+                        parts = path.strip("/").split("/")
+                        if len(parts) != 4:
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
+                            return
+                        try:
+                            submission_id = int(parts[2])
+                        except ValueError:
+                            app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "提交 ID 无效"})
+                            return
+
+                        with app._connect() as conn:
+                            row = conn.execute(
+                                "SELECT * FROM study_submissions WHERE id = ?",
+                                (submission_id,),
+                            ).fetchone()
+                        if row is None:
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "提交不存在"})
+                            return
+                        if row["user_id"] != user["id"] and not user["is_admin"]:
+                            app._send_json(self, HTTPStatus.FORBIDDEN, {"error": "无权查看该凭证"})
+                            return
+
+                        evidence_path = app.upload_dir / row["evidence_path"]
+                        if not evidence_path.exists():
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "凭证文件不存在"})
+                            return
+
+                        payload = evidence_path.read_bytes()
+                        self.send_response(HTTPStatus.OK)
+                        self.send_header("Content-Type", row["evidence_mime"] or "application/octet-stream")
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("Content-Length", str(len(payload)))
+                        self.end_headers()
+                        self.wfile.write(payload)
+                        return
                     if path == "/api/state":
                         user = app._auth_user(self)
                         if not user:
@@ -490,6 +685,10 @@ class MathQuestApp:
                             app._send_json(self, HTTPStatus.FORBIDDEN, {"error": "需要管理员权限"})
                             return
                         with app._connect() as conn:
+                            pending_rows = conn.execute(
+                                "SELECT user_id, COUNT(*) AS count FROM study_submissions WHERE status = 'pending' GROUP BY user_id"
+                            ).fetchall()
+                            pending_counts = {row["user_id"]: row["count"] for row in pending_rows}
                             rows = conn.execute(
                                 """
                                 SELECT users.*, user_states.state_json
@@ -501,21 +700,61 @@ class MathQuestApp:
 
                         users = []
                         for row in rows:
-                            state = default_state()
-                            if row["state_json"]:
-                                try:
-                                    state = normalize_state(json.loads(row["state_json"]))
-                                except json.JSONDecodeError:
-                                    state = default_state()
+                            with app._connect() as detail_conn:
+                                state = app._load_user_state(detail_conn, row["id"])
                             summary = summarize_state(state)
                             users.append(
                                 {
                                     "user": app._public_user(row),
                                     "summary": {key: value for key, value in summary.items() if key != "recentDays"},
                                     "recent_days": summary["recentDays"],
+                                    "pending_count": pending_counts.get(row["id"], 0),
                                 }
                             )
                         app._send_json(self, HTTPStatus.OK, {"users": users})
+                        return
+                    if path.startswith("/api/admin/users/"):
+                        user = app._auth_user(self)
+                        if not user:
+                            app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
+                            return
+                        if not user["is_admin"]:
+                            app._send_json(self, HTTPStatus.FORBIDDEN, {"error": "需要管理员权限"})
+                            return
+                        try:
+                            target_id = int(path.rsplit("/", 1)[-1])
+                        except ValueError:
+                            app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "用户 ID 无效"})
+                            return
+
+                        with app._connect() as conn:
+                            row = conn.execute(
+                                """
+                                SELECT users.*, user_states.state_json
+                                FROM users
+                                LEFT JOIN user_states ON user_states.user_id = users.id
+                                WHERE users.id = ?
+                                """,
+                                (target_id,),
+                            ).fetchone()
+
+                        if row is None:
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "用户不存在"})
+                            return
+
+                        with app._connect() as conn:
+                            state = app._load_user_state(conn, row["id"])
+                            submissions = app._list_submissions(conn, user_id=row["id"], limit=30)
+                        app._send_json(
+                            self,
+                            HTTPStatus.OK,
+                            {
+                                "user": app._public_user(row),
+                                "summary": summarize_state(state),
+                                "state": state,
+                                "submissions": submissions,
+                            },
+                        )
                         return
 
                     app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
@@ -608,6 +847,93 @@ class MathQuestApp:
                         self.wfile.write(payload)
                         return
 
+                    if path == "/api/submissions":
+                        user = app._auth_user(self)
+                        if not user:
+                            app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
+                            return
+                        body = app._read_json(self)
+                        date_key = str(body.get("date_key", "")).strip() or datetime.now().strftime("%Y-%m-%d")
+                        duration_minutes = clamp_int(body.get("duration_minutes"), 1, 720, 0)
+                        note = str(body.get("note", "")).strip()[:500]
+                        if duration_minutes <= 0:
+                            app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "学习时长至少 1 分钟"})
+                            return
+                        payload_bytes, evidence_name, evidence_mime = app._decode_evidence_payload(body)
+                        evidence_path = app._store_evidence_file(payload_bytes, evidence_name, evidence_mime)
+                        now = utc_now_iso()
+                        with app._connect() as conn:
+                            cur = conn.execute(
+                                """
+                                INSERT INTO study_submissions (
+                                    user_id, date_key, duration_minutes, note, evidence_name, evidence_mime, evidence_path, status, created_at
+                                )
+                                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                                """,
+                                (user["id"], date_key, duration_minutes, note, evidence_name, evidence_mime, evidence_path, now),
+                            )
+                            row = conn.execute(
+                                """
+                                SELECT study_submissions.*, users.username, users.display_name, users.is_admin
+                                FROM study_submissions
+                                JOIN users ON users.id = study_submissions.user_id
+                                WHERE study_submissions.id = ?
+                                """,
+                                (cur.lastrowid,),
+                            ).fetchone()
+                        app._send_json(self, HTTPStatus.CREATED, {"submission": app._format_submission(row)})
+                        return
+
+                    if path.startswith("/api/admin/submissions/") and path.endswith("/review"):
+                        user = app._auth_user(self)
+                        if not user:
+                            app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
+                            return
+                        if not user["is_admin"]:
+                            app._send_json(self, HTTPStatus.FORBIDDEN, {"error": "需要管理员权限"})
+                            return
+                        parts = path.strip("/").split("/")
+                        if len(parts) != 5:
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
+                            return
+                        try:
+                            submission_id = int(parts[3])
+                        except ValueError:
+                            app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "提交 ID 无效"})
+                            return
+                        body = app._read_json(self)
+                        action = str(body.get("action", "")).strip().lower()
+                        if action not in {"approve", "reject"}:
+                            app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "action 只能是 approve 或 reject"})
+                            return
+                        status_value = "approved" if action == "approve" else "rejected"
+                        admin_note = str(body.get("admin_note", "")).strip()[:500]
+                        reviewed_at = utc_now_iso()
+                        with app._connect() as conn:
+                            exists = conn.execute("SELECT id FROM study_submissions WHERE id = ?", (submission_id,)).fetchone()
+                            if not exists:
+                                app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "提交不存在"})
+                                return
+                            conn.execute(
+                                """
+                                UPDATE study_submissions
+                                SET status = ?, admin_note = ?, reviewed_by = ?, reviewed_at = ?
+                                WHERE id = ?
+                                """,
+                                (status_value, admin_note, user["id"], reviewed_at, submission_id),
+                            )
+                            row = conn.execute(
+                                """
+                                SELECT study_submissions.*, users.username, users.display_name, users.is_admin
+                                FROM study_submissions
+                                JOIN users ON users.id = study_submissions.user_id
+                                WHERE study_submissions.id = ?
+                                """,
+                                (submission_id,),
+                            ).fetchone()
+                        app._send_json(self, HTTPStatus.OK, {"submission": app._format_submission(row, include_user=True)})
+                        return
+
                     app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
                 except ValueError as exc:
                     app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": str(exc)})
@@ -619,6 +945,52 @@ class MathQuestApp:
             def do_PUT(self) -> None:
                 try:
                     path = urlparse(self.path).path
+                    if path == "/api/me":
+                        user = app._auth_user(self)
+                        if not user:
+                            app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
+                            return
+                        body = app._read_json(self)
+                        display_name = str(body.get("display_name", "")).strip()
+                        current_password = str(body.get("current_password", ""))
+                        new_password = str(body.get("new_password", ""))
+                        updates: list[tuple[str, Any]] = []
+                        params: list[Any] = []
+
+                        if display_name:
+                            if len(display_name) > 32:
+                                app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "昵称最长 32 个字符"})
+                                return
+                            updates.append(("display_name = ?", display_name))
+                            params.append(display_name)
+
+                        if new_password:
+                            if len(new_password) < PASSWORD_MIN_LENGTH:
+                                app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": f"新密码至少 {PASSWORD_MIN_LENGTH} 位"})
+                                return
+                            if not current_password:
+                                app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "修改密码需要输入当前密码"})
+                                return
+                            if not app._verify_password(current_password, user["password_salt"], user["password_hash"]):
+                                app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "当前密码不正确"})
+                                return
+                            salt_hex, password_hash = app._hash_password(new_password)
+                            updates.append(("password_salt = ?", salt_hex))
+                            params.append(salt_hex)
+                            updates.append(("password_hash = ?", password_hash))
+                            params.append(password_hash)
+
+                        if not updates:
+                            app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "没有可更新的内容"})
+                            return
+
+                        with app._connect() as conn:
+                            sql = f"UPDATE users SET {', '.join(part for part, _ in updates)} WHERE id = ?"
+                            conn.execute(sql, [*params, user["id"]])
+                            updated = conn.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+                        app._send_json(self, HTTPStatus.OK, {"message": "账号信息已更新", "user": app._public_user(updated)})
+                        return
+
                     if path == "/api/state":
                         user = app._auth_user(self)
                         if not user:

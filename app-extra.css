@@ -210,7 +210,8 @@ body:not(.mq-ready) #app {
 
 .mq-account-name {
   color: var(--gold);
-  font-family: var(--pixel);
+  font-family: var(--body);
+  font-weight: 700;
   letter-spacing: 0.8px;
   line-height: 1.4;
   font-size: 14px;
@@ -358,15 +359,725 @@ body:not(.mq-ready) #app {
   color: var(--text);
 }
 
+.mq-auth-form textarea,
+.mq-upload-panel textarea,
+.mq-admin-review-note {
+  width: 100%;
+  font-family: var(--body);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(10, 14, 26, 0.9);
+  color: var(--text);
+  padding: 11px 12px;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.mq-auth-form textarea:focus,
+.mq-upload-panel textarea:focus,
+.mq-admin-review-note:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: 0 0 0 2px rgba(0, 212, 170, 0.12), var(--glow-teal);
+}
+
+.mq-checkin-section {
+  position: relative;
+  overflow: hidden;
+}
+
+.mq-checkin-section::after {
+  content: "";
+  position: absolute;
+  right: -20px;
+  top: -26px;
+  width: 110px;
+  height: 110px;
+  background: radial-gradient(circle, rgba(245, 200, 66, 0.08) 0%, transparent 72%);
+  pointer-events: none;
+}
+
+.mq-checkin-head,
+.mq-admin-toolbar,
+.mq-ring-layout,
+.mq-upload-actions,
+.mq-admin-hero,
+.mq-admin-review-top,
+.mq-submission-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.mq-checkin-title,
+.mq-admin-toolbar-title,
+.mq-upload-title,
+.mq-submission-list-title {
+  color: var(--gold);
+  font-family: var(--body);
+  font-weight: 700;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.mq-checkin-sub,
+.mq-admin-toolbar-sub,
+.mq-upload-help {
+  color: var(--text2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.mq-checkin-rarity {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.mq-stamp-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(61, 80, 128, 0.45);
+  background: rgba(10, 14, 26, 0.72);
+  color: var(--text2);
+  font-size: 12px;
+}
+
+.mq-stamp-legend-item small {
+  font-size: 10px;
+}
+
+.mq-stamp-legend-item.top {
+  border-color: rgba(245, 200, 66, 0.38);
+  color: var(--gold);
+  box-shadow: var(--glow-gold);
+}
+
+.mq-checkin-calendar {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mq-calendar-week {
+  text-align: center;
+  font-family: var(--pixel);
+  font-size: 8px;
+  color: var(--text3);
+  padding-bottom: 2px;
+}
+
+.mq-calendar-cell {
+  min-height: 78px;
+  border-radius: 12px;
+  border: 1px solid rgba(42, 58, 90, 0.7);
+  background: rgba(10, 14, 26, 0.5);
+  padding: 8px 6px;
+  display: grid;
+  justify-items: center;
+  grid-template-rows: auto 1fr;
+  position: relative;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.mq-calendar-cell.today {
+  border-color: var(--gold);
+  box-shadow: inset 0 0 0 1px rgba(245, 200, 66, 0.12), var(--glow-gold);
+}
+
+.mq-calendar-cell.ghost {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mq-calendar-day {
+  font-size: 11px;
+  color: var(--text2);
+  justify-self: start;
+}
+
+.mq-calendar-ring {
+  width: 44px;
+  height: 44px;
+  align-self: center;
+  justify-self: center;
+  border-radius: 999px;
+  border: 2px solid rgba(100, 116, 139, 0.25);
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle, rgba(15, 23, 42, 0.8), rgba(10, 14, 26, 0.28));
+}
+
+.mq-calendar-ring.red {
+  border-color: var(--red);
+  box-shadow: 0 0 10px rgba(248, 113, 113, 0.28);
+}
+
+.mq-calendar-ring.green {
+  border-color: var(--green);
+  box-shadow: 0 0 10px rgba(74, 222, 128, 0.28);
+}
+
+.mq-calendar-ring.gold {
+  border-color: var(--gold);
+  box-shadow: 0 0 14px rgba(245, 200, 66, 0.45);
+}
+
+.mq-calendar-stamp {
+  min-height: 24px;
+  display: grid;
+  place-items: center;
+  font-size: 24px;
+  filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.32));
+}
+
+.mq-calendar-stamp.stamp {
+  animation: mq-stamp-pop 0.45s cubic-bezier(0.21, 1.3, 0.31, 1) both;
+}
+
+.mq-ring-layout {
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.mq-ring-shell {
+  position: relative;
+  width: 190px;
+  height: 190px;
+  flex-shrink: 0;
+}
+
+.mq-ring-svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.mq-ring-track,
+.mq-ring-fill {
+  fill: none;
+  stroke-width: 14;
+  stroke-linecap: round;
+}
+
+.mq-ring-track {
+  stroke: rgba(42, 58, 90, 0.8);
+}
+
+.mq-ring-fill {
+  stroke: var(--teal);
+  filter: drop-shadow(0 0 14px rgba(0, 212, 170, 0.36));
+  transition: stroke-dashoffset 0.8s cubic-bezier(0.22, 1, 0.36, 1), stroke 0.4s ease;
+}
+
+.mq-ring-fill.green {
+  stroke: var(--green);
+  filter: drop-shadow(0 0 14px rgba(74, 222, 128, 0.36));
+}
+
+.mq-ring-fill.gold {
+  stroke: var(--gold);
+  filter: drop-shadow(0 0 16px rgba(245, 200, 66, 0.56));
+}
+
+.mq-ring-center {
+  position: absolute;
+  inset: 24px;
+  border-radius: 999px;
+  background: radial-gradient(circle at top, rgba(30, 41, 59, 0.88), rgba(10, 14, 26, 0.96));
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  text-align: center;
+  gap: 6px;
+  border: 1px solid rgba(61, 80, 128, 0.38);
+}
+
+.mq-ring-state {
+  color: var(--text2);
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 110px;
+}
+
+.mq-ring-badge {
+  font-family: var(--body);
+  font-size: 11px;
+  font-weight: 700;
+  color: #000;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--gold), #ff8c00);
+  box-shadow: var(--glow-gold);
+}
+
+.mq-study-stats {
+  flex: 1;
+  display: grid;
+  gap: 10px;
+}
+
+.mq-study-stat-card,
+.mq-admin-kpi {
+  border: 1px solid rgba(42, 58, 90, 0.7);
+  border-radius: 12px;
+  background: rgba(10, 14, 26, 0.45);
+  padding: 12px;
+}
+
+.mq-study-stat-card strong,
+.mq-admin-kpi strong {
+  display: block;
+  color: var(--gold);
+  font-family: var(--pixel);
+  font-size: 16px;
+  line-height: 1.5;
+  margin-bottom: 4px;
+}
+
+.mq-study-stat-card span,
+.mq-admin-kpi span {
+  color: var(--text2);
+  font-size: 12px;
+}
+
+.mq-upload-panel,
+.mq-progress-card,
+.mq-submission-card,
+.mq-admin-panel,
+.mq-admin-user-tab {
+  margin-top: 12px;
+  border: 1px solid rgba(42, 58, 90, 0.7);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(20, 28, 46, 0.95), rgba(10, 14, 26, 0.95));
+  padding: 12px;
+}
+
+.mq-upload-grid,
+.mq-admin-note-grid,
+.mq-admin-kpi-grid,
+.mq-admin-dashboard-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.mq-upload-grid,
+.mq-admin-note-grid,
+.mq-admin-kpi-grid {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.mq-upload-panel label {
+  display: grid;
+  gap: 6px;
+  color: var(--text2);
+  font-size: 12px;
+  margin-top: 10px;
+}
+
+.mq-upload-panel input {
+  width: 100%;
+  font-family: var(--body);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(10, 14, 26, 0.9);
+  color: var(--text);
+  padding: 11px 12px;
+  font-size: 14px;
+}
+
+.mq-progress-card {
+  margin-top: 12px;
+}
+
+.mq-progress-card.success {
+  border-color: rgba(74, 222, 128, 0.35);
+}
+
+.mq-progress-card.error {
+  border-color: rgba(248, 113, 113, 0.35);
+  color: var(--red);
+}
+
+.mq-progress-title {
+  color: var(--text);
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.mq-progress-steps {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mq-progress-steps span {
+  padding: 6px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(42, 58, 90, 0.7);
+  background: rgba(10, 14, 26, 0.56);
+  color: var(--text3);
+  font-size: 11px;
+}
+
+.mq-progress-steps span.active,
+.mq-progress-steps span.done {
+  color: var(--teal2);
+  border-color: rgba(0, 212, 170, 0.35);
+}
+
+.mq-progress-steps span.done {
+  background: rgba(0, 212, 170, 0.08);
+}
+
+.mq-submission-list-title {
+  margin-top: 16px;
+  margin-bottom: 10px;
+}
+
+.mq-submission-card.approved {
+  border-color: rgba(74, 222, 128, 0.25);
+}
+
+.mq-submission-card.rejected {
+  border-color: rgba(248, 113, 113, 0.25);
+}
+
+.mq-submission-minutes,
+.mq-admin-review-top strong {
+  color: var(--text);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.mq-submission-meta,
+.mq-submission-admin-note,
+.mq-mini-link,
+.mq-admin-review-top span,
+.mq-admin-activity-foot,
+.mq-admin-hero-sub {
+  color: var(--text2);
+  font-size: 12px;
+}
+
+.mq-submission-note {
+  margin-top: 8px;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.mq-submission-actions,
+.mq-admin-review-actions,
+.mq-admin-task-row {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.mq-mini-link {
+  text-decoration: none;
+  color: var(--teal2);
+}
+
+.mq-submission-badge {
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(42, 58, 90, 0.7);
+  font-size: 11px;
+  color: var(--text2);
+}
+
+.mq-submission-badge.pending {
+  color: var(--purple2);
+  border-color: rgba(167, 139, 250, 0.4);
+}
+
+.mq-submission-badge.approved {
+  color: var(--green);
+  border-color: rgba(74, 222, 128, 0.32);
+}
+
+.mq-submission-badge.rejected {
+  color: var(--red);
+  border-color: rgba(248, 113, 113, 0.32);
+}
+
+.mq-exp-particle {
+  position: absolute;
+  z-index: 90;
+  pointer-events: none;
+  font-family: var(--pixel);
+  font-size: 9px;
+  color: var(--gold);
+  text-shadow: var(--glow-gold);
+  animation: mq-exp-fly 1.4s ease-out forwards;
+}
+
+.mq-bar-burst {
+  animation: mq-bar-burst 0.8s ease;
+}
+
+.mq-admin-toolbar {
+  margin-bottom: 14px;
+}
+
+.mq-admin-tabs {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  margin-bottom: 14px;
+}
+
+.mq-admin-user-tab {
+  min-width: 210px;
+  margin-top: 0;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.mq-admin-user-tab.active {
+  border-color: rgba(245, 200, 66, 0.46);
+  box-shadow: var(--glow-gold);
+  transform: translateY(-2px);
+}
+
+.mq-admin-user-tab-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.mq-admin-user-tab-name,
+.mq-admin-hero-title {
+  color: var(--text);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.mq-admin-user-tab-level {
+  font-family: var(--pixel);
+  color: var(--gold);
+  font-size: 9px;
+}
+
+.mq-admin-user-tab-sub,
+.mq-admin-user-tab-meta {
+  display: block;
+  color: var(--text2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mq-admin-dashboard-grid {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.mq-admin-panel-title {
+  color: var(--gold);
+  font-family: var(--body);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+
+.section-title,
+.tab,
+.quest-tag,
+.hero-class,
+.study-goal,
+.seg-hint,
+.journal-label,
+.stars-label,
+.stat-lbl,
+.history-date,
+.history-meta,
+.history-note,
+.report-title,
+.report-row,
+.level-row-name,
+.level-row-req,
+.empty-state,
+.task-name,
+.bottom-nav-item .nav-label {
+  font-family: var(--body);
+  letter-spacing: 0;
+}
+
+.section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--purple2);
+}
+
+.mq-admin-meter {
+  margin-bottom: 12px;
+}
+
+.mq-admin-meter-top,
+.mq-admin-activity-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 6px;
+  color: var(--text2);
+  font-size: 12px;
+}
+
+.mq-admin-meter-top strong,
+.mq-admin-activity-head strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.mq-admin-meter-track,
+.mq-admin-activity-bar {
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(10, 14, 26, 0.8);
+  border: 1px solid rgba(42, 58, 90, 0.7);
+}
+
+.mq-admin-meter-fill,
+.mq-admin-activity-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--teal), var(--teal2));
+}
+
+.mq-admin-meter-fill.gold,
+.mq-admin-activity-fill {
+  background: linear-gradient(90deg, var(--gold), #ff8c00);
+}
+
+.mq-admin-meter-fill.teal {
+  background: linear-gradient(90deg, var(--teal), var(--teal2));
+}
+
+.mq-admin-meter-fill.purple {
+  background: linear-gradient(90deg, var(--purple), var(--purple2));
+}
+
+.mq-admin-note-block {
+  border-radius: 12px;
+  border: 1px solid rgba(42, 58, 90, 0.7);
+  background: rgba(10, 14, 26, 0.45);
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.mq-admin-note-block span,
+.mq-admin-note-grid span,
+.mq-admin-segments {
+  color: var(--text2);
+  font-size: 12px;
+}
+
+.mq-admin-note-block p {
+  margin-top: 6px;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.mq-admin-note-grid div {
+  border-radius: 10px;
+  background: rgba(10, 14, 26, 0.45);
+  border: 1px solid rgba(42, 58, 90, 0.7);
+  padding: 10px;
+}
+
+.mq-admin-note-grid strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--gold);
+}
+
+.mq-admin-task-chip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(42, 58, 90, 0.7);
+  color: var(--text2);
+  font-size: 11px;
+}
+
+.mq-admin-task-chip.done {
+  color: var(--green);
+  border-color: rgba(74, 222, 128, 0.3);
+  background: rgba(74, 222, 128, 0.08);
+}
+
+.mq-admin-activity-row,
+.mq-admin-review-card {
+  border-radius: 12px;
+  border: 1px solid rgba(42, 58, 90, 0.7);
+  background: rgba(10, 14, 26, 0.45);
+  padding: 10px;
+  margin-top: 10px;
+}
+
+.mq-admin-review-card.approved {
+  border-color: rgba(74, 222, 128, 0.28);
+}
+
+.mq-admin-review-card.rejected {
+  border-color: rgba(248, 113, 113, 0.28);
+}
+
+@keyframes mq-stamp-pop {
+  0% { transform: scale(0.2) rotate(-18deg); opacity: 0; }
+  55% { transform: scale(1.22) rotate(6deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+
+@keyframes mq-exp-fly {
+  0% { transform: translateY(0) scale(0.6); opacity: 0; }
+  15% { opacity: 1; }
+  100% { transform: translateY(-110px) scale(1.05); opacity: 0; }
+}
+
+@keyframes mq-bar-burst {
+  0% { filter: brightness(1); }
+  35% { filter: brightness(1.7) drop-shadow(0 0 16px rgba(245, 200, 66, 0.55)); }
+  100% { filter: brightness(1); }
+}
+
 @media (max-width: 640px) {
   .mq-account-bar,
-  .mq-admin-user-top,
-  .mq-auth-actions {
+  .mq-auth-actions,
+  .mq-checkin-head,
+  .mq-admin-toolbar,
+  .mq-ring-layout,
+  .mq-upload-actions,
+  .mq-admin-hero,
+  .mq-submission-top,
+  .mq-admin-review-top {
     flex-direction: column;
     align-items: stretch;
   }
 
   .mq-account-actions {
+    justify-content: flex-start;
+  }
+
+  .mq-ring-shell {
+    margin: 0 auto;
+  }
+
+  .mq-checkin-rarity {
     justify-content: flex-start;
   }
 }

@@ -17,12 +17,7 @@ python server.py
 
 默认会启动在 `http://127.0.0.1:8000`。
 
-默认管理员账号：
-
-- 用户名：`admin`
-- 密码：`admin123456`
-
-也可以自定义：
+管理员账号也可以自定义：
 
 ```bash
 python server.py --port 9000 --admin-user root --admin-password strongpass123

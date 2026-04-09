@@ -116,6 +116,14 @@ class MathQuestServerTest(unittest.TestCase):
         self.assertEqual(data["state"]["history"]["2026-04-09"]["journal"]["top"], "函数题")
         self.assertEqual(data["state"]["totalXp"], 75)
 
+        status, data = client.request(
+            "PUT",
+            "/api/me",
+            {"display_name": "Alice Hero", "current_password": "secret123", "new_password": "secret456"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(data["user"]["display_name"], "Alice Hero")
+
         status, data = client.request("GET", "/api/admin/users")
         self.assertEqual(status, 403)
         self.assertEqual(data["error"], "需要管理员权限")
@@ -168,6 +176,46 @@ class MathQuestServerTest(unittest.TestCase):
         self.assertIn("bob02", users)
         self.assertEqual(users["bob02"]["summary"]["totalXp"], 60)
         self.assertEqual(users["bob02"]["summary"]["lastActiveDate"], "2026-04-08")
+
+        bob_id = users["bob02"]["user"]["id"]
+        status, data = admin.request("GET", f"/api/admin/users/{bob_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["user"]["username"], "bob02")
+        self.assertEqual(data["summary"]["totalXp"], 60)
+        self.assertEqual(data["state"]["history"]["2026-04-08"]["journal"]["top"], "几何")
+
+        status, data = user_client.request(
+            "POST",
+            "/api/submissions",
+            {
+                "date_key": "2026-04-09",
+                "duration_minutes": 75,
+                "note": "函数专项练习",
+                "evidence_name": "proof.txt",
+                "evidence_data": "data:text/plain;base64,SGVsbG8gTWF0aCBRdWVzdA==",
+            },
+        )
+        self.assertEqual(status, 201)
+        submission_id = data["submission"]["id"]
+        self.assertEqual(data["submission"]["status"], "pending")
+
+        status, data = admin.request(
+            "POST",
+            f"/api/admin/submissions/{submission_id}/review",
+            {"action": "approve", "admin_note": "做得不错"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(data["submission"]["status"], "approved")
+
+        status, data = user_client.request("GET", "/api/submissions/mine")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["submissions"][0]["status"], "approved")
+
+        status, data = user_client.request("GET", "/api/state")
+        self.assertEqual(status, 200)
+        approved_segments = data["state"]["history"]["2026-04-09"]["segments"]
+        total_minutes = sum(item["e"] - item["s"] for item in approved_segments)
+        self.assertEqual(total_minutes, 75)
 
 
 if __name__ == "__main__":
