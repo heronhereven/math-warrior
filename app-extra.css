@@ -831,6 +831,89 @@ body:not(.mq-ready) #app {
   margin-bottom: 14px;
 }
 
+.mq-admin-hq {
+  margin-bottom: 14px;
+  border: 1px solid rgba(245, 200, 66, 0.26);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(245, 200, 66, 0.12), transparent 32%),
+    radial-gradient(circle at bottom left, rgba(0, 212, 170, 0.08), transparent 34%),
+    linear-gradient(180deg, rgba(20, 28, 46, 0.98), rgba(10, 14, 26, 0.98));
+  padding: 14px;
+  box-shadow: inset 0 1px 0 rgba(245, 200, 66, 0.08), 0 0 24px rgba(245, 200, 66, 0.08);
+}
+
+.mq-admin-hq-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.mq-admin-hq-title {
+  color: var(--gold);
+  font-family: var(--body);
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.mq-admin-hq-sub {
+  color: var(--text2);
+  font-size: 12px;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+
+.mq-admin-hq-badge {
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--gold), #ff8c00);
+  color: #000;
+  font-family: var(--body);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+  box-shadow: var(--glow-gold);
+}
+
+.mq-admin-hq-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.mq-admin-hq-card,
+.mq-admin-hq-item {
+  border-radius: 12px;
+  border: 1px solid rgba(42, 58, 90, 0.7);
+  background: rgba(10, 14, 26, 0.48);
+  padding: 12px;
+}
+
+.mq-admin-hq-card strong,
+.mq-admin-hq-item strong {
+  display: block;
+  color: var(--gold);
+  font-family: var(--pixel);
+  font-size: 16px;
+  line-height: 1.4;
+  margin-bottom: 4px;
+}
+
+.mq-admin-hq-card span,
+.mq-admin-hq-item span {
+  color: var(--text2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mq-admin-hq-list {
+  display: grid;
+  gap: 10px;
+}
+
 .mq-admin-tabs {
   display: flex;
   gap: 10px;
@@ -1069,6 +1152,7 @@ body:not(.mq-ready) #app {
   .mq-auth-actions,
   .mq-checkin-head,
   .mq-admin-toolbar,
+  .mq-admin-hq-hero,
   .mq-ring-layout,
   .mq-upload-actions,
   .mq-admin-hero,

@@ -392,11 +392,12 @@
           <div class="section-title">🛡 小和观察台</div>
           <div class="mq-admin-toolbar">
             <div>
-              <div class="mq-admin-toolbar-title">小勇者状态巡航</div>
+              <div class="mq-admin-toolbar-title">泡面侠状态巡航</div>
               <div id="mq-admin-status" class="mq-admin-toolbar-sub">准备打开大家的成长小宇宙...</div>
             </div>
             <button type="button" id="mq-admin-refresh" class="btn btn-teal">立即刷新</button>
           </div>
+          <div id="mq-admin-hq" class="mq-admin-hq"></div>
           <div id="mq-admin-summary" class="mq-admin-summary"></div>
           <div id="mq-admin-tabs" class="mq-admin-tabs"></div>
           <div id="mq-admin-dashboard"></div>
@@ -579,7 +580,7 @@
     accountEl.classList.remove("mq-hidden");
     document.getElementById("mq-account-name").textContent = currentUser.display_name;
     document.getElementById("mq-account-sub").textContent = `@${currentUser.username} · 创建于 ${formatDateTime(currentUser.created_at)}`;
-    document.getElementById("mq-role-pill").textContent = currentUser.is_admin ? "小和" : "小勇者";
+    document.getElementById("mq-role-pill").textContent = currentUser.is_admin ? "小和" : "泡面侠";
     document.getElementById("mq-role-pill").classList.toggle("admin", Boolean(currentUser.is_admin));
     document.getElementById("mq-admin-tab").classList.toggle("mq-hidden", !currentUser.is_admin);
   }
@@ -1039,6 +1040,57 @@
     return users.find((item) => !item.user?.is_admin) || users[0] || null;
   }
 
+  function renderAdminHQ(users) {
+    const hqEl = document.getElementById("mq-admin-hq");
+    if (!hqEl) return;
+    if (!Array.isArray(users) || users.length === 0) {
+      hqEl.innerHTML = "";
+      return;
+    }
+
+    const pendingTotal = users.reduce((sum, item) => sum + (item.pending_count || 0), 0);
+    const overAchievers = users.filter((item) => {
+      const latest = item.recent_days?.[0];
+      return latest && latest.studyMinutes > DAILY_GOAL_MINUTES;
+    }).length;
+    const quietUsers = users.filter((item) => !item.summary?.lastActiveDate).length;
+    const hotList = users
+      .filter((item) => (item.pending_count || 0) > 0)
+      .sort((left, right) => (right.pending_count || 0) - (left.pending_count || 0))
+      .slice(0, 3);
+    const spotlight = hotList.length
+      ? hotList
+          .map(
+            (item) => `
+              <div class="mq-admin-hq-item">
+                <strong>${escapeHtml(item.user?.display_name || item.user?.username || "泡面侠")}</strong>
+                <span>${item.pending_count || 0} 份证明等你点头</span>
+              </div>
+            `,
+          )
+          .join("")
+      : `<div class="mq-admin-hq-item"><strong>全部清空啦</strong><span>目前没有新的学习证明在等你。</span></div>`;
+
+    hqEl.innerHTML = `
+      <div class="mq-admin-hq-hero">
+        <div>
+          <div class="mq-admin-hq-title">小和主控台</div>
+          <div class="mq-admin-hq-sub">这是只属于小和的观察界面。上面是全局节奏，下面再切到每位泡面侠的成长看板。</div>
+        </div>
+        <div class="mq-admin-hq-badge">小和专属</div>
+      </div>
+      <div class="mq-admin-hq-grid">
+        <div class="mq-admin-hq-card"><strong>${pendingTotal}</strong><span>待你点头的证明</span></div>
+        <div class="mq-admin-hq-card"><strong>${overAchievers}</strong><span>今天已经闪金的泡面侠</span></div>
+        <div class="mq-admin-hq-card"><strong>${quietUsers}</strong><span>还没发光的泡面侠</span></div>
+      </div>
+      <div class="mq-admin-hq-spotlight">
+        <div class="mq-admin-panel-title">优先看看这些泡面侠</div>
+        <div class="mq-admin-hq-list">${spotlight}</div>
+      </div>
+    `;
+  }
+
   function renderAdminSummary(users) {
     const summaryEl = document.getElementById("mq-admin-summary");
     if (!Array.isArray(users) || users.length === 0) {
@@ -1054,7 +1106,7 @@
     summaryEl.innerHTML = `
       <div class="mq-admin-card"><strong>${users.length}</strong><span>账号总数</span></div>
       <div class="mq-admin-card"><strong>${activeToday}</strong><span>今日活跃</span></div>
-      <div class="mq-admin-card"><strong>${recordedUsers}</strong><span>留下脚印的小勇者</span></div>
+      <div class="mq-admin-card"><strong>${recordedUsers}</strong><span>留下脚印的泡面侠</span></div>
       <div class="mq-admin-card"><strong>${averageXp}</strong><span>人均 XP</span></div>
     `;
   }
@@ -1062,7 +1114,7 @@
   function renderAdminTabs() {
     const tabsEl = document.getElementById("mq-admin-tabs");
     if (!Array.isArray(adminUsers) || adminUsers.length === 0) {
-      tabsEl.innerHTML = `<div class="mq-admin-empty">还没有可以查看的小勇者。</div>`;
+      tabsEl.innerHTML = `<div class="mq-admin-empty">还没有可以查看的泡面侠。</div>`;
       return;
     }
 
@@ -1076,7 +1128,7 @@
         return `
           <button type="button" class="mq-admin-user-tab ${isActive ? "active" : ""}" data-admin-user-id="${user.id}">
             <span class="mq-admin-user-tab-top">
-              <span class="mq-admin-user-tab-name">${escapeHtml(user.display_name || user.username || "未命名小勇者")}</span>
+              <span class="mq-admin-user-tab-name">${escapeHtml(user.display_name || user.username || "未命名泡面侠")}</span>
               <span class="mq-admin-user-tab-level">Lv.${summary.level?.level || 1}</span>
             </span>
             <span class="mq-admin-user-tab-sub">@${escapeHtml(user.username || "")}</span>
@@ -1108,7 +1160,7 @@
   function renderAdminDashboard(detail) {
     const dashboardEl = document.getElementById("mq-admin-dashboard");
     if (!detail) {
-      dashboardEl.innerHTML = `<div class="mq-admin-empty">点开一个小勇者，就能看到 TA 的成长看板。</div>`;
+      dashboardEl.innerHTML = `<div class="mq-admin-empty">点开一位泡面侠，就能看到 TA 的成长看板。</div>`;
       return;
     }
 
@@ -1155,7 +1207,7 @@
             `;
           })
           .join("")
-      : `<div class="mq-admin-empty">这位小勇者还没留下学习足迹。</div>`;
+      : `<div class="mq-admin-empty">这位泡面侠还没留下学习足迹。</div>`;
     const submissionHtml = submissions.length
       ? submissions
           .map(
@@ -1174,7 +1226,7 @@
                   ${
                     item.status === "pending"
                       ? `
-                        <input id="mq-review-note-${item.id}" class="mq-admin-review-note" placeholder="给这位小勇者留一句话（可选）" />
+                        <input id="mq-review-note-${item.id}" class="mq-admin-review-note" placeholder="给这位泡面侠留一句话（可选）" />
                         <button type="button" class="mq-mini-btn" data-review-action="approve" data-submission-id="${item.id}">通过</button>
                         <button type="button" class="mq-mini-btn" data-review-action="reject" data-submission-id="${item.id}">再补一点</button>
                       `
@@ -1187,13 +1239,13 @@
             `,
           )
           .join("")
-      : `<div class="mq-admin-empty">这位小勇者暂时还没送来学习证明。</div>`;
+      : `<div class="mq-admin-empty">这位泡面侠暂时还没送来学习证明。</div>`;
 
     dashboardEl.innerHTML = `
       <div class="mq-admin-hero">
         <div>
-          <div class="mq-admin-hero-title">${escapeHtml(user.display_name || user.username || "未命名小勇者")}</div>
-          <div class="mq-admin-hero-sub">@${escapeHtml(user.username || "")} · ${user.is_admin ? "小和主控台" : "小勇者档案"}</div>
+          <div class="mq-admin-hero-title">${escapeHtml(user.display_name || user.username || "未命名泡面侠")}</div>
+          <div class="mq-admin-hero-sub">@${escapeHtml(user.username || "")} · ${user.is_admin ? "小和主控台" : "泡面侠档案"}</div>
         </div>
         <div class="mq-admin-hero-side">
           <span class="mq-pill ${user.is_admin ? "admin" : ""}">Lv.${summary.level?.level || 1} ${escapeHtml(summary.level?.name || "新手学徒")}</span>
@@ -1224,7 +1276,7 @@
         </div>
 
         <div class="mq-admin-panel">
-          <div class="mq-admin-panel-title">小勇者观察</div>
+          <div class="mq-admin-panel-title">泡面侠观察</div>
           <div class="mq-admin-note-block">
             <span>印象最深</span>
             <p>${escapeHtml(journal.top || "暂无记录")}</p>
@@ -1274,7 +1326,7 @@
     if (preferCache && adminDetailCache.has(userId)) {
       renderAdminDashboard(adminDetailCache.get(userId));
     } else {
-      dashboardEl.innerHTML = `<div class="mq-admin-empty">正在展开这位小勇者的成长看板...</div>`;
+      dashboardEl.innerHTML = `<div class="mq-admin-empty">正在展开这位泡面侠的成长看板...</div>`;
     }
 
     try {
@@ -1297,18 +1349,19 @@
     const dashboardEl = document.getElementById("mq-admin-dashboard");
     if (!silent && !adminUsers.length) {
       summaryEl.innerHTML = `<div class="mq-admin-card"><strong>...</strong><span>加载中</span></div>`;
-      tabsEl.innerHTML = `<div class="mq-admin-empty">正在召集小勇者名单...</div>`;
+      tabsEl.innerHTML = `<div class="mq-admin-empty">正在召集泡面侠名单...</div>`;
       dashboardEl.innerHTML = `<div class="mq-admin-empty">成长看板准备中...</div>`;
     }
     setAdminStatus(silent ? "小和正在后台悄悄同步大家的进度..." : "小和正在整理这张观察台...");
     try {
       const data = await api("/api/admin/users");
       adminUsers = (data.users || []).slice().sort((left, right) => (right.summary?.totalXp || 0) - (left.summary?.totalXp || 0));
+      renderAdminHQ(adminUsers);
       renderAdminSummary(adminUsers);
       if (!adminUsers.length) {
-        tabsEl.innerHTML = `<div class="mq-admin-empty">还没有小勇者加入这里。</div>`;
-        dashboardEl.innerHTML = `<div class="mq-admin-empty">等第一位小勇者出现，这里就会亮起来。</div>`;
-        setAdminStatus("现在还没有可以查看的小勇者。");
+        tabsEl.innerHTML = `<div class="mq-admin-empty">还没有泡面侠加入这里。</div>`;
+        dashboardEl.innerHTML = `<div class="mq-admin-empty">等第一位泡面侠出现，这里就会亮起来。</div>`;
+        setAdminStatus("现在还没有可以查看的泡面侠。");
         return;
       }
 
