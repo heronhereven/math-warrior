@@ -5,16 +5,22 @@
   const ADMIN_POLL_MS = 30000;
   const CIRCUMFERENCE = 2 * Math.PI * 52;
   const STAMP_POOL = [
-    { emoji: "🐹", rarity: 1, label: "仓鼠" },
-    { emoji: "🐰", rarity: 2, label: "兔兔" },
-    { emoji: "🐱", rarity: 3, label: "小猫" },
-    { emoji: "🐶", rarity: 4, label: "小狗" },
-    { emoji: "🦊", rarity: 5, label: "狐狸" },
-    { emoji: "🐼", rarity: 6, label: "熊猫" },
-    { emoji: "🦁", rarity: 7, label: "狮子" },
-    { emoji: "🦄", rarity: 8, label: "独角兽" },
-    { emoji: "🐥", rarity: 9, label: "小鸭子" },
+    { emoji: "🐹", rarity: 1, label: "仓鼠", weight: 20 },
+    { emoji: "🐰", rarity: 2, label: "兔兔", weight: 18 },
+    { emoji: "🐱", rarity: 3, label: "小猫", weight: 15 },
+    { emoji: "🐶", rarity: 4, label: "小狗", weight: 12 },
+    { emoji: "🦊", rarity: 5, label: "狐狸", weight: 9 },
+    { emoji: "🐼", rarity: 6, label: "熊猫", weight: 7 },
+    { emoji: "🦁", rarity: 7, label: "狮子", weight: 5 },
+    { emoji: "🦄", rarity: 8, label: "独角兽", weight: 3 },
+    { emoji: "🐥", rarity: 9, label: "小鸭子", weight: 1 },
   ];
+  const LOCAL_STORE_KEY = "mq_local_backend_v1";
+  const TASK_XP = { correction: 24, difficulty: 22, review: 18 };
+  const JOURNAL_XP = 22;
+  const GOAL_BONUS_XP = 46;
+  const OVERACHIEVE_BONUS_XP = 36;
+  const STAMP_REWARD_BASE = 14;
   const TASK_LABELS = {
     correction: { title: "订正错题", copy: "把今天绊脚的题一个个哄顺。" },
     difficulty: { title: "解决难点", copy: "把最卡的那一块掰开揉碎。" },
@@ -51,6 +57,7 @@
     booted: false,
     latestStampDate: null,
     backendReachable: false,
+    transport: "remote",
   };
 
   function defaultState() {
@@ -272,7 +279,478 @@
     return countDoneTasks(day) === 3;
   }
 
+  function currentIso() {
+    return new Date().toISOString();
+  }
+
+  function defaultLocalBackend() {
+    return {
+      currentUserId: null,
+      nextUserId: 2,
+      nextSubmissionId: 1,
+      users: [
+        {
+          id: 1,
+          username: "admin",
+          display_name: "小和",
+          password: "admin123456",
+          is_admin: true,
+          created_at: currentIso(),
+          last_login_at: null,
+        },
+      ],
+      states: {},
+      submissions: [],
+    };
+  }
+
+  function loadLocalBackend() {
+    try {
+      const raw = window.localStorage.getItem(LOCAL_STORE_KEY);
+      const parsed = raw ? JSON.parse(raw) : defaultLocalBackend();
+      return normalizeLocalBackend(parsed);
+    } catch (_error) {
+      return defaultLocalBackend();
+    }
+  }
+
+  function saveLocalBackend(store) {
+    window.localStorage.setItem(LOCAL_STORE_KEY, JSON.stringify(store));
+  }
+
+  function normalizeLocalBackend(raw) {
+    const base = defaultLocalBackend();
+    if (!raw || typeof raw !== "object") return base;
+    if (Array.isArray(raw.users)) {
+      base.users = raw.users
+        .filter((item) => item && typeof item === "object" && typeof item.username === "string")
+        .map((item) => ({
+          id: clampInt(item.id, 1, 10000000, 0),
+          username: item.username,
+          display_name: typeof item.display_name === "string" ? item.display_name : item.username,
+          password: typeof item.password === "string" ? item.password : "",
+          is_admin: Boolean(item.is_admin),
+          created_at: typeof item.created_at === "string" ? item.created_at : currentIso(),
+          last_login_at: typeof item.last_login_at === "string" ? item.last_login_at : null,
+        }))
+        .filter((item) => item.id > 0);
+    }
+    if (!base.users.some((item) => item.username === "admin")) {
+      base.users.unshift(defaultLocalBackend().users[0]);
+    }
+    base.currentUserId = clampInt(raw.currentUserId, 0, 10000000, 0) || null;
+    base.nextUserId = clampInt(raw.nextUserId, 2, 10000000, Math.max(...base.users.map((item) => item.id), 1) + 1);
+    base.nextSubmissionId = clampInt(raw.nextSubmissionId, 1, 10000000, 1);
+    if (raw.states && typeof raw.states === "object") {
+      Object.entries(raw.states).forEach(([key, value]) => {
+        base.states[key] = normalizeState(value);
+      });
+    }
+    if (Array.isArray(raw.submissions)) {
+      base.submissions = raw.submissions
+        .filter((item) => item && typeof item === "object")
+        .map((item) => ({
+          id: clampInt(item.id, 1, 10000000, 0),
+          user_id: clampInt(item.user_id, 1, 10000000, 0),
+          date_key: typeof item.date_key === "string" ? item.date_key : currentDayKey(),
+          duration_minutes: clampInt(item.duration_minutes, 1, 720, 1),
+          note: typeof item.note === "string" ? item.note : "",
+          status: typeof item.status === "string" ? item.status : "pending",
+          admin_note: typeof item.admin_note === "string" ? item.admin_note : "",
+          created_at: typeof item.created_at === "string" ? item.created_at : currentIso(),
+          reviewed_at: typeof item.reviewed_at === "string" ? item.reviewed_at : null,
+          reviewed_by: clampInt(item.reviewed_by, 0, 10000000, 0) || null,
+          evidence_name: typeof item.evidence_name === "string" ? item.evidence_name : "proof",
+          evidence_mime: typeof item.evidence_mime === "string" ? item.evidence_mime : "application/octet-stream",
+          evidence_url: typeof item.evidence_url === "string" ? item.evidence_url : "",
+        }))
+        .filter((item) => item.id > 0 && item.user_id > 0);
+    }
+    return base;
+  }
+
+  function localPublicUser(user) {
+    return {
+      id: user.id,
+      username: user.username,
+      display_name: user.display_name,
+      is_admin: user.is_admin,
+      created_at: user.created_at,
+      last_login_at: user.last_login_at,
+    };
+  }
+
+  function localUserById(store, userId) {
+    return store.users.find((item) => item.id === userId) || null;
+  }
+
+  function localCurrentUser(store) {
+    return localUserById(store, store.currentUserId);
+  }
+
+  function localRawState(store, userId) {
+    return normalizeState(store.states[String(userId)] || defaultState());
+  }
+
+  function localSaveRawState(store, userId, state) {
+    store.states[String(userId)] = normalizeState(state);
+  }
+
+  function computeStudyXp(minutes) {
+    if (minutes <= 0) return 0;
+    return Math.round(14 * (Math.exp(minutes / 95) - 1));
+  }
+
+  function pickLocalStamp() {
+    const totalWeight = STAMP_POOL.reduce((sum, item) => sum + item.weight, 0);
+    let roll = Math.random() * totalWeight;
+    for (const item of STAMP_POOL) {
+      roll -= item.weight;
+      if (roll <= 0) return item;
+    }
+    return STAMP_POOL[STAMP_POOL.length - 1];
+  }
+
+  function localHydrateState(store, userId) {
+    const raw = localRawState(store, userId);
+    const history = { ...(raw.history || {}) };
+    const submissions = store.submissions.filter((item) => item.user_id === userId);
+    submissions.forEach((item) => {
+      if (!history[item.date_key]) history[item.date_key] = defaultDay();
+    });
+    const stampedDates = [];
+    let totalXp = 0;
+    let lastDate = null;
+    Object.keys(history)
+      .sort()
+      .forEach((dateKey) => {
+        const day = normalizeDay(history[dateKey]);
+        const daySubs = submissions.filter((item) => item.date_key === dateKey);
+        const approved = daySubs.filter((item) => item.status === "approved");
+        const pending = daySubs.filter((item) => item.status === "pending");
+        const rejected = daySubs.filter((item) => item.status === "rejected");
+        const approvedMinutes = approved.reduce((sum, item) => sum + item.duration_minutes, 0);
+        const pendingMinutesValue = pending.reduce((sum, item) => sum + item.duration_minutes, 0);
+        const rejectedMinutes = rejected.reduce((sum, item) => sum + item.duration_minutes, 0);
+        day.segments = approvedMinutes ? [{ s: 0, e: approvedMinutes }] : [];
+        day.status = {
+          goalMinutes: DAILY_GOAL_MINUTES,
+          approvedMinutes,
+          pendingMinutes: pendingMinutesValue,
+          rejectedMinutes,
+          approvedCount: approved.length,
+          pendingCount: pending.length,
+          rejectedCount: rejected.length,
+          progressState: approvedMinutes > DAILY_GOAL_MINUTES ? "over" : approvedMinutes >= DAILY_GOAL_MINUTES ? "goal" : approvedMinutes > 0 ? "growing" : "locked",
+          rewardState: !day.checkin.stamped
+            ? "idle"
+            : approvedMinutes > DAILY_GOAL_MINUTES
+              ? "over"
+              : approvedMinutes >= DAILY_GOAL_MINUTES
+                ? "earned"
+                : pendingMinutesValue > 0
+                  ? "pending"
+                  : "muted",
+        };
+        let comboDays = 0;
+        if (day.checkin.stamped) {
+          comboDays = 1;
+          let cursor = new Date(`${dateKey}T12:00:00`);
+          while (true) {
+            cursor.setDate(cursor.getDate() - 1);
+            const prevKey = localDateKey(cursor);
+            const prev = normalizeDay(history[prevKey]);
+            if (!prev.checkin.stamped || prev.checkin.emoji !== day.checkin.emoji) break;
+            comboDays += 1;
+          }
+        }
+        const baseReward = day.checkin.stamped && approvedMinutes >= DAILY_GOAL_MINUTES ? STAMP_REWARD_BASE * day.checkin.rarity : 0;
+        const comboBonus = comboDays > 1 && baseReward ? baseReward * (2 ** (comboDays - 1)) : 0;
+        const overBoost = approvedMinutes > DAILY_GOAL_MINUTES && baseReward ? Math.round(baseReward * 0.4 + comboBonus * 0.25) : 0;
+        day.checkin.comboDays = comboDays;
+        day.checkin.comboBonusXp = comboBonus;
+        day.checkin.rewardXp = baseReward + comboBonus + overBoost;
+        let xp = 0;
+        if (approvedMinutes > 0) {
+          xp += computeStudyXp(approvedMinutes);
+          Object.entries(TASK_XP).forEach(([key, amount]) => {
+            if (day.tasks[key]) xp += amount;
+          });
+          if (journalCount(day) > 0) xp += JOURNAL_XP;
+          if (approvedMinutes >= DAILY_GOAL_MINUTES && isAllTasksDone(day)) xp += GOAL_BONUS_XP;
+          if (approvedMinutes > DAILY_GOAL_MINUTES) xp += OVERACHIEVE_BONUS_XP;
+          xp += day.checkin.rewardXp;
+        }
+        day.xpEarned = xp;
+        history[dateKey] = day;
+        totalXp += xp;
+        if (day.checkin.stamped) stampedDates.push(dateKey);
+        if (approvedMinutes > 0 || pendingMinutesValue > 0 || day.checkin.stamped) lastDate = dateKey;
+      });
+
+    let streak = 0;
+    if (stampedDates.length) {
+      const set = new Set(stampedDates);
+      let cursor = new Date(`${stampedDates.sort().slice(-1)[0]}T12:00:00`);
+      while (set.has(localDateKey(cursor))) {
+        streak += 1;
+        cursor.setDate(cursor.getDate() - 1);
+      }
+    }
+    return normalizeState({ totalXp, streak, lastDate, history });
+  }
+
+  function localSummary(store, user) {
+    const state = localHydrateState(store, user.id);
+    const keys = Object.keys(state.history || {}).sort((left, right) => right.localeCompare(left));
+    const recentDays = keys.slice(0, 7).map((dateKey) => {
+      const day = normalizeDay(state.history[dateKey]);
+      return {
+        date: dateKey,
+        xpEarned: day.xpEarned || 0,
+        studyMinutes: approvedMinutes(day),
+        taskCount: countDoneTasks(day),
+        mood: day.mood || 0,
+        top: day.journal.top || "",
+        stuck: day.journal.stuck || "",
+        progressState: day.status.progressState,
+        rewardState: day.status.rewardState,
+      };
+    });
+    return {
+      totalXp: state.totalXp,
+      streak: state.streak,
+      level: getLevelInfo(state.totalXp).current,
+      daysRecorded: keys.length,
+      lastActiveDate: state.lastDate,
+      totalMinutes: recentDays.reduce((sum, item) => sum + (item.studyMinutes || 0), 0),
+      recentDays,
+    };
+  }
+
+  function localError(status, error) {
+    const err = new Error(error);
+    err.status = status;
+    err.payload = { error };
+    throw err;
+  }
+
+  async function localApi(path, options = {}) {
+    const method = (options.method || "GET").toUpperCase();
+    const body = options.body || {};
+    const store = loadLocalBackend();
+    const currentUser = localCurrentUser(store);
+    const currentPublicUser = currentUser ? localPublicUser(currentUser) : null;
+
+    if (path === "/api/me" && method === "GET") {
+      if (!currentUser) localError(401, "未登录");
+      return { authenticated: true, user: currentPublicUser };
+    }
+
+    if (path === "/api/auth/register" && method === "POST") {
+      const username = String(body.username || "").trim();
+      const displayName = String(body.display_name || "").trim() || username;
+      const password = String(body.password || "");
+      if (!/^[A-Za-z0-9_-]{3,24}$/.test(username)) localError(400, "用户名需为 3-24 位字母、数字、下划线或减号");
+      if (password.length < 6) localError(400, "密码至少 6 位");
+      if (store.users.some((item) => item.username === username)) localError(409, "用户名已存在");
+      const now = currentIso();
+      const user = {
+        id: store.nextUserId,
+        username,
+        display_name: displayName.slice(0, 32),
+        password,
+        is_admin: false,
+        created_at: now,
+        last_login_at: now,
+      };
+      store.nextUserId += 1;
+      store.currentUserId = user.id;
+      store.users.push(user);
+      localSaveRawState(store, user.id, defaultState());
+      saveLocalBackend(store);
+      return { message: "注册成功", user: localPublicUser(user) };
+    }
+
+    if (path === "/api/auth/login" && method === "POST") {
+      const username = String(body.username || "").trim();
+      const password = String(body.password || "");
+      const user = store.users.find((item) => item.username === username && item.password === password);
+      if (!user) localError(401, "用户名或密码错误");
+      user.last_login_at = currentIso();
+      store.currentUserId = user.id;
+      saveLocalBackend(store);
+      return { message: "登录成功", user: localPublicUser(user) };
+    }
+
+    if (path === "/api/auth/logout" && method === "POST") {
+      store.currentUserId = null;
+      saveLocalBackend(store);
+      return { message: "已退出登录" };
+    }
+
+    if (!currentUser) localError(401, "未登录");
+
+    if (path === "/api/state" && method === "GET") {
+      return { state: localHydrateState(store, currentUser.id) };
+    }
+
+    if (path === "/api/state" && method === "PUT") {
+      const current = localRawState(store, currentUser.id);
+      const incoming = normalizeState(body.state || {});
+      const merged = normalizeState(current);
+      Object.entries(incoming.history || {}).forEach(([dateKey, incomingDay]) => {
+        const existing = normalizeDay(merged.history[dateKey] || defaultDay());
+        existing.tasks = incomingDay.tasks;
+        existing.journal = incomingDay.journal;
+        existing.mood = incomingDay.mood;
+        existing.energy = incomingDay.energy;
+        existing.rewardShown = incomingDay.rewardShown;
+        merged.history[dateKey] = existing;
+      });
+      localSaveRawState(store, currentUser.id, merged);
+      saveLocalBackend(store);
+      return { message: "保存成功", state: localHydrateState(store, currentUser.id) };
+    }
+
+    if (path === "/api/checkin" && method === "POST") {
+      if (currentUser.is_admin) localError(403, "小和不会在这里签到");
+      const dateKey = String(body.date_key || currentDayKey());
+      const raw = localRawState(store, currentUser.id);
+      const day = normalizeDay(raw.history[dateKey] || defaultDay());
+      if (!day.checkin.stamped) {
+        const stamp = pickLocalStamp();
+        day.checkin = {
+          stamped: true,
+          emoji: stamp.emoji,
+          rarity: stamp.rarity,
+          label: stamp.label,
+          stampedAt: currentIso(),
+          comboBonusXp: 0,
+          comboDays: 1,
+          rewardXp: 0,
+        };
+        raw.history[dateKey] = day;
+        localSaveRawState(store, currentUser.id, raw);
+        saveLocalBackend(store);
+      }
+      const state = localHydrateState(store, currentUser.id);
+      return { message: "签到成功", date_key: dateKey, checkin: state.history[dateKey].checkin, state };
+    }
+
+    if (path === "/api/submissions/mine" && method === "GET") {
+      const submissions = store.submissions
+        .filter((item) => item.user_id === currentUser.id)
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
+      return { submissions };
+    }
+
+    if (path === "/api/submissions" && method === "POST") {
+      if (currentUser.is_admin) localError(403, "小和不会在这里提交学习证明");
+      const submission = {
+        id: store.nextSubmissionId,
+        user_id: currentUser.id,
+        date_key: String(body.date_key || currentDayKey()),
+        duration_minutes: clampInt(body.duration_minutes, 1, 720, 0),
+        note: String(body.note || "").slice(0, 500),
+        status: "pending",
+        admin_note: "",
+        created_at: currentIso(),
+        reviewed_at: null,
+        reviewed_by: null,
+        evidence_name: String(body.evidence_name || "proof"),
+        evidence_mime: String((body.evidence_data || "").split(";")[0].replace("data:", "") || "application/octet-stream"),
+        evidence_url: String(body.evidence_data || ""),
+      };
+      if (!submission.duration_minutes) localError(400, "学习时长至少 1 分钟");
+      if (!submission.evidence_url) localError(400, "每次上传都需要附上凭证");
+      store.nextSubmissionId += 1;
+      store.submissions.push(submission);
+      saveLocalBackend(store);
+      return { submission };
+    }
+
+    if (path === "/api/me" && method === "PUT") {
+      const displayName = String(body.display_name || "").trim();
+      const currentPassword = String(body.current_password || "");
+      const newPassword = String(body.new_password || "");
+      if (!displayName && !newPassword) localError(400, "没有可更新的内容");
+      if (displayName) currentUser.display_name = displayName.slice(0, 32);
+      if (newPassword) {
+        if (!currentPassword) localError(400, "修改密码需要输入当前密码");
+        if (currentUser.password !== currentPassword) localError(400, "当前密码不正确");
+        if (newPassword.length < 6) localError(400, "新密码至少 6 位");
+        currentUser.password = newPassword;
+      }
+      saveLocalBackend(store);
+      return { message: "账号信息已更新", user: localPublicUser(currentUser) };
+    }
+
+    if (path === "/api/admin/users" && method === "GET") {
+      if (!currentUser.is_admin) localError(403, "需要管理员权限");
+      const users = store.users
+        .filter((item) => !item.is_admin)
+        .map((user) => {
+          const summary = localSummary(store, user);
+          return {
+            user: localPublicUser(user),
+            summary: {
+              totalXp: summary.totalXp,
+              streak: summary.streak,
+              level: summary.level,
+              daysRecorded: summary.daysRecorded,
+              lastActiveDate: summary.lastActiveDate,
+              totalMinutes: summary.totalMinutes,
+            },
+            recent_days: summary.recentDays,
+            pending_count: store.submissions.filter((item) => item.user_id === user.id && item.status === "pending").length,
+          };
+        });
+      return { users };
+    }
+
+    if (path.startsWith("/api/admin/users/") && method === "GET") {
+      if (!currentUser.is_admin) localError(403, "需要管理员权限");
+      const userId = clampInt(path.split("/").pop(), 1, 10000000, 0);
+      const target = localUserById(store, userId);
+      if (!target) localError(404, "用户不存在");
+      const summary = localSummary(store, target);
+      return {
+        user: localPublicUser(target),
+        summary,
+        state: localHydrateState(store, target.id),
+        submissions: store.submissions.filter((item) => item.user_id === target.id).sort((left, right) => String(right.created_at).localeCompare(String(left.created_at))),
+      };
+    }
+
+    if (path.startsWith("/api/admin/submissions/") && path.endsWith("/review") && method === "POST") {
+      if (!currentUser.is_admin) localError(403, "需要管理员权限");
+      const parts = path.split("/");
+      const submissionId = clampInt(parts[4], 1, 10000000, 0);
+      const submission = store.submissions.find((item) => item.id === submissionId);
+      if (!submission) localError(404, "提交不存在");
+      const action = String(body.action || "").trim().toLowerCase();
+      if (!["approve", "reject"].includes(action)) localError(400, "action 只能是 approve 或 reject");
+      submission.status = action === "approve" ? "approved" : "rejected";
+      submission.admin_note = String(body.admin_note || "").slice(0, 500);
+      submission.reviewed_at = currentIso();
+      submission.reviewed_by = currentUser.id;
+      saveLocalBackend(store);
+      return {
+        submission: {
+          ...submission,
+          user: localPublicUser(localUserById(store, submission.user_id)),
+        },
+      };
+    }
+
+    localError(404, "接口不存在");
+  }
+
   function api(path, options = {}) {
+    if (app.transport === "local") {
+      return Promise.resolve().then(() => localApi(path, options));
+    }
     const request = { credentials: "same-origin", ...options };
     const headers = new Headers(request.headers || {});
     if (request.body && typeof request.body !== "string" && !(request.body instanceof FormData)) {
@@ -296,7 +774,7 @@
   function explainError(error, fallback) {
     if (error?.payload?.error) return error.payload.error;
     if (error?.status == null) {
-      return "现在打开的是静态页面，注册和登录都需要后端服务。请先运行 python server.py，再打开 http://127.0.0.1:8000。";
+      return "当前没有连上后端，已经切到本地测试模式。这里的账号和记录会保存在当前浏览器里。";
     }
     return fallback;
   }
@@ -529,10 +1007,6 @@
 
   async function handleLogin(event) {
     event.preventDefault();
-    if (!app.backendReachable) {
-      showAuth("现在打开的是静态页面，登录需要后端服务。请先运行 python server.py，再打开 http://127.0.0.1:8000。");
-      return;
-    }
     const username = document.getElementById("login-username").value.trim();
     const password = document.getElementById("login-password").value;
     showBoot("正在打开你的存档...");
@@ -548,10 +1022,6 @@
 
   async function handleRegister(event) {
     event.preventDefault();
-    if (!app.backendReachable) {
-      showAuth("现在打开的是静态页面，注册需要后端服务。请先运行 python server.py，再打开 http://127.0.0.1:8000。");
-      return;
-    }
     const username = document.getElementById("register-username").value.trim();
     const displayName = document.getElementById("register-display-name").value.trim();
     const password = document.getElementById("register-password").value;
@@ -1418,16 +1888,19 @@
     try {
       const data = await api("/api/me");
       app.backendReachable = true;
+      app.transport = "remote";
       app.user = data.user;
       hideAuth();
       await afterLogin();
     } catch (error) {
       if (error.status === 401) {
         app.backendReachable = true;
+        app.transport = "remote";
         showAuth("");
       } else {
         app.backendReachable = false;
-        showAuth("后端暂时没有连上，静态页面已经换成新客户端了。把服务跑起来后，这里会直接切到真实存档。");
+        app.transport = "local";
+        showAuth("当前是本地测试模式。你可以直接注册和登录，所有数据会保存在这个浏览器里。之后打开桌面客户端时，再切回真实同步。");
       }
     }
   }
