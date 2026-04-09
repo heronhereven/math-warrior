@@ -140,13 +140,14 @@
       `
       <div id="mq-boot" class="mq-overlay">
         <div class="mq-card">
-          <div class="mq-card-title">MATH<br>QUEST</div>
+          <div class="mq-card-title mq-logo-title">MATH<br><span>QUEST</span> ⚔️</div>
           <div class="mq-card-subtitle" id="mq-boot-text">正在连接服务器...</div>
         </div>
       </div>
       <div id="mq-auth" class="mq-overlay mq-hidden">
         <div class="mq-card">
-          <div class="mq-card-title">账号系统</div>
+          <div class="mq-card-title mq-logo-title">MATH<br><span>QUEST</span> ⚔️</div>
+          <div class="mq-card-kicker">账号存档</div>
           <div class="mq-card-subtitle">登录后，学习记录会和账号绑定。管理员账号可以查看所有人的情况。</div>
           <div class="mq-auth-switch">
             <button type="button" id="mq-auth-tab-login" class="active">登录</button>
@@ -463,7 +464,7 @@
                   <div class="mq-admin-day">
                     <strong>${escapeHtml(day.date)}</strong>
                     <small>学习 ${day.studyMinutes || 0} 分钟 · XP +${day.xpEarned || 0} · 支线 ${day.taskCount || 0}/3</small>
-                    ${day.top ? `<div style="margin-top:6px;color:#cbd5e1">${escapeHtml(day.top)}</div>` : ""}
+                    ${day.top ? `<div class="mq-admin-day-note">${escapeHtml(day.top)}</div>` : ""}
                   </div>
                 `,
               )
