@@ -223,6 +223,15 @@ body {
   z-index: 20;
 }
 
+.mq-auth-screen {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px 0;
+  z-index: 19;
+}
+
 .mq-boot-card,
 .mq-auth-card {
   width: min(980px, calc(100% - 28px));

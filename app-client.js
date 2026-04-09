@@ -50,6 +50,7 @@
     lastTotalXp: 0,
     booted: false,
     latestStampDate: null,
+    backendReachable: false,
   };
 
   function defaultState() {
@@ -292,6 +293,14 @@
     });
   }
 
+  function explainError(error, fallback) {
+    if (error?.payload?.error) return error.payload.error;
+    if (error?.status == null) {
+      return "现在打开的是静态页面，注册和登录都需要后端服务。请先运行 python server.py，再打开 http://127.0.0.1:8000。";
+    }
+    return fallback;
+  }
+
   function setAuthMode(mode) {
     document.querySelectorAll("[data-auth-mode]").forEach((button) => {
       button.classList.toggle("active", button.dataset.authMode === mode);
@@ -520,6 +529,10 @@
 
   async function handleLogin(event) {
     event.preventDefault();
+    if (!app.backendReachable) {
+      showAuth("现在打开的是静态页面，登录需要后端服务。请先运行 python server.py，再打开 http://127.0.0.1:8000。");
+      return;
+    }
     const username = document.getElementById("login-username").value.trim();
     const password = document.getElementById("login-password").value;
     showBoot("正在打开你的存档...");
@@ -529,12 +542,16 @@
       hideAuth();
       await afterLogin();
     } catch (error) {
-      showAuth(error.payload?.error || "登录失败");
+      showAuth(explainError(error, "登录失败"));
     }
   }
 
   async function handleRegister(event) {
     event.preventDefault();
+    if (!app.backendReachable) {
+      showAuth("现在打开的是静态页面，注册需要后端服务。请先运行 python server.py，再打开 http://127.0.0.1:8000。");
+      return;
+    }
     const username = document.getElementById("register-username").value.trim();
     const displayName = document.getElementById("register-display-name").value.trim();
     const password = document.getElementById("register-password").value;
@@ -548,7 +565,7 @@
       hideAuth();
       await afterLogin();
     } catch (error) {
-      showAuth(error.payload?.error || "注册失败");
+      showAuth(explainError(error, "注册失败"));
     }
   }
 
@@ -1400,13 +1417,16 @@
     showBoot("正在检查登录状态...");
     try {
       const data = await api("/api/me");
+      app.backendReachable = true;
       app.user = data.user;
       hideAuth();
       await afterLogin();
     } catch (error) {
       if (error.status === 401) {
+        app.backendReachable = true;
         showAuth("");
       } else {
+        app.backendReachable = false;
         showAuth("后端暂时没有连上，静态页面已经换成新客户端了。把服务跑起来后，这里会直接切到真实存档。");
       }
     }

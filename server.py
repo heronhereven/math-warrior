@@ -435,6 +435,7 @@ class MathQuestApp:
         self,
         db_path: Path,
         static_dir: Path,
+        upload_dir: Path | None = None,
         admin_username: str = "admin",
         admin_password: str = "admin123456",
         host: str = "127.0.0.1",
@@ -443,7 +444,7 @@ class MathQuestApp:
         self.db_path = Path(db_path)
         self.static_dir = Path(static_dir)
         self.index_path = self.static_dir / "index.html"
-        self.upload_dir = self.static_dir / "uploads"
+        self.upload_dir = Path(upload_dir) if upload_dir is not None else self.static_dir / "uploads"
         self.host = host
         self.port = port
         self.admin_username = admin_username
@@ -1322,6 +1323,7 @@ def main() -> None:
     app = MathQuestApp(
         db_path=root / args.db,
         static_dir=root,
+        upload_dir=root / "uploads",
         admin_username=args.admin_user,
         admin_password=args.admin_password,
         host=args.host,
