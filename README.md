@@ -47,6 +47,7 @@ python gui_admin_app.py
 - 这个同步仓库由小和持有
 - 你这边和小和那边都用各自的 token 访问同一个私有仓库
 - 轮询间隔设成 300 秒就能满足“5 分钟内同步”的要求
+- 除了 5 分钟轮询外，本地一旦出现新的可上传内容，也会自动触发一次隐形同步
 
 桌面端配置文件：
 
@@ -54,6 +55,18 @@ python gui_admin_app.py
 - 小和端：`MathQuestXiaohe/github-sync-admin.json`
 
 这两个文件都会在首次启动桌面端时自动生成模板。把 `enabled` 改成 `true`，再填好 `owner / repo / token` 即可。
+
+同步日志：
+
+- 泡面侠端：`MathQuestDesktop/github-sync-client.log`
+- 小和端：`MathQuestXiaohe/github-sync-server.log`
+
+日志里会记录：
+
+- 状态快照是否真的发生变化
+- 学习证明是否被判定为重复上传
+- 审核结果是否重复回写
+- 远端和本地状态冲突时采用了什么策略
 
 基础命令：
 

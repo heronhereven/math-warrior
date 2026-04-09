@@ -1,27 +1,15 @@
 import argparse
-import base64
 import json
 import mimetypes
 import secrets
 import sqlite3
-import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError
-from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
 
 from desktop_runtime import app_data_root
+from github_sync_common import GitHubRepoClient, append_sync_log, sha256_hex, utc_now_iso
 from server import MathQuestApp, default_state, normalize_state
-
-
-API_VERSION = "2022-11-28"
-
-
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def local_admin_root() -> Path:
@@ -30,79 +18,6 @@ def local_admin_root() -> Path:
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parent
-
-
-class GitHubRepoClient:
-    def __init__(self, owner: str, repo: str, token: str, branch: str = "main") -> None:
-        self.owner = owner
-        self.repo = repo
-        self.token = token
-        self.branch = branch
-
-    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
-        url = f"https://api.github.com{path}"
-        data = None
-        if payload is not None:
-            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        request = Request(url, data=data, method=method)
-        request.add_header("Accept", "application/vnd.github+json")
-        request.add_header("Authorization", f"Bearer {self.token}")
-        request.add_header("X-GitHub-Api-Version", API_VERSION)
-        if data is not None:
-            request.add_header("Content-Type", "application/json")
-        try:
-            with urlopen(request, timeout=25) as response:
-                raw = response.read()
-                return json.loads(raw.decode("utf-8")) if raw else None
-        except HTTPError as exc:
-            if exc.code == 404:
-                return None
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"GitHub API {exc.code}: {detail}") from exc
-
-    def list_tree(self, prefix: str) -> dict[str, str]:
-        path = f"/repos/{self.owner}/{self.repo}/git/trees/{quote(self.branch, safe='')}?recursive=1"
-        payload = self._request("GET", path) or {}
-        items: dict[str, str] = {}
-        for item in payload.get("tree", []):
-            if item.get("type") != "blob":
-                continue
-            item_path = item.get("path", "")
-            if item_path.startswith(prefix):
-                items[item_path] = item.get("sha", "")
-        return items
-
-    def get_file(self, remote_path: str) -> tuple[dict[str, Any], str] | tuple[None, None]:
-        query = urlencode({"ref": self.branch})
-        path = f"/repos/{self.owner}/{self.repo}/contents/{quote(remote_path, safe='/')}?{query}"
-        payload = self._request("GET", path)
-        if payload is None:
-            return None, None
-        raw = base64.b64decode(payload["content"])
-        return json.loads(raw.decode("utf-8")), payload.get("sha", "")
-
-    def get_bytes(self, remote_path: str) -> tuple[bytes, str] | tuple[None, None]:
-        query = urlencode({"ref": self.branch})
-        path = f"/repos/{self.owner}/{self.repo}/contents/{quote(remote_path, safe='/')}?{query}"
-        payload = self._request("GET", path)
-        if payload is None:
-            return None, None
-        return base64.b64decode(payload["content"]), payload.get("sha", "")
-
-    def put_bytes(self, remote_path: str, content: bytes, message: str, sha: str | None = None) -> str:
-        body = {
-            "message": message,
-            "branch": self.branch,
-            "content": base64.b64encode(content).decode("ascii"),
-        }
-        if sha:
-            body["sha"] = sha
-        path = f"/repos/{self.owner}/{self.repo}/contents/{quote(remote_path, safe='/')}"
-        payload = self._request("PUT", path, body) or {}
-        return payload.get("content", {}).get("sha", "")
-
-    def put_json(self, remote_path: str, data: dict[str, Any], message: str, sha: str | None = None) -> str:
-        return self.put_bytes(remote_path, json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"), message, sha)
 
 
 def initialize_admin_app(db_path: Path, upload_dir: Path) -> None:
@@ -129,6 +44,7 @@ def connect_db(db_path: Path) -> sqlite3.Connection:
             submission_sha TEXT,
             review_sha TEXT,
             state_sha TEXT,
+            submission_fingerprint TEXT,
             imported_at TEXT NOT NULL
         )
         """
@@ -142,7 +58,25 @@ def connect_db(db_path: Path) -> sqlite3.Connection:
         )
         """
     )
+    ensure_columns(
+        conn,
+        "github_server_links",
+        {
+            "submission_fingerprint": "TEXT",
+        },
+    )
     return conn
+
+
+def ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    for name, sql_type in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
+
+
+def log_path_for(db_path: Path) -> Path:
+    return db_path.parent / "github-sync-server.log"
 
 
 def ensure_remote_user(conn: sqlite3.Connection, payload: dict[str, Any]) -> int:
@@ -184,7 +118,28 @@ def save_state(conn: sqlite3.Connection, user_id: int, state: dict[str, Any]) ->
     )
 
 
-def import_state_snapshots(conn: sqlite3.Connection, gh: GitHubRepoClient) -> int:
+def submission_fingerprint_from_payload(payload: dict[str, Any], evidence_hash: str | None = None) -> str:
+    fingerprint = str(payload.get("submission_fingerprint", "")).strip()
+    if fingerprint:
+        return fingerprint
+    evidence_ref = payload.get("evidence", {}).get("path", "")
+    return sha256_hex(
+        json.dumps(
+            {
+                "username": payload.get("user", {}).get("username", ""),
+                "created_at": payload.get("submitted_at", ""),
+                "date_key": payload.get("date_key", ""),
+                "duration_minutes": payload.get("duration_minutes", 0),
+                "note": payload.get("note", ""),
+                "evidence": evidence_hash or evidence_ref,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+
+
+def import_state_snapshots(conn: sqlite3.Connection, gh: GitHubRepoClient, *, log_path: Path) -> int:
     tree = gh.list_tree("state-cache/")
     imported = 0
     for remote_path, state_sha in tree.items():
@@ -206,6 +161,7 @@ def import_state_snapshots(conn: sqlite3.Connection, gh: GitHubRepoClient) -> in
             """,
             (username, state_sha, utc_now_iso()),
         )
+        append_sync_log(log_path, "info", "state-import", "已导入泡面侠状态快照", username=username)
         imported += 1
     conn.commit()
     return imported
@@ -225,7 +181,7 @@ def merge_day_snapshot(conn: sqlite3.Connection, user_id: int, date_key: str, sn
     save_state(conn, user_id, state)
 
 
-def import_submissions(conn: sqlite3.Connection, gh: GitHubRepoClient, upload_dir: Path) -> int:
+def import_submissions(conn: sqlite3.Connection, gh: GitHubRepoClient, upload_dir: Path, *, log_path: Path) -> int:
     tree = gh.list_tree("submissions/")
     imported = 0
     for remote_path, submission_sha in tree.items():
@@ -236,10 +192,11 @@ def import_submissions(conn: sqlite3.Connection, gh: GitHubRepoClient, upload_di
             continue
         remote_submission_id = payload["submission_id"]
         existing = conn.execute(
-            "SELECT local_submission_id, submission_sha FROM github_server_links WHERE remote_submission_id = ?",
+            "SELECT local_submission_id, submission_sha, submission_fingerprint FROM github_server_links WHERE remote_submission_id = ?",
             (remote_submission_id,),
         ).fetchone()
         if existing and existing["submission_sha"] == submission_sha:
+            append_sync_log(log_path, "info", "submission-skip", "远端提交没有变化，跳过导入", submission_id=remote_submission_id)
             continue
 
         user_payload = payload["user"]
@@ -248,9 +205,18 @@ def import_submissions(conn: sqlite3.Connection, gh: GitHubRepoClient, upload_di
 
         if existing and existing["local_submission_id"]:
             conn.execute(
-                "UPDATE github_server_links SET submission_sha = ? WHERE remote_submission_id = ?",
-                (submission_sha, remote_submission_id),
+                """
+                UPDATE github_server_links
+                SET submission_sha = ?, submission_fingerprint = ?
+                WHERE remote_submission_id = ?
+                """,
+                (
+                    submission_sha,
+                    existing["submission_fingerprint"] or "",
+                    remote_submission_id,
+                ),
             )
+            append_sync_log(log_path, "info", "submission-update", "远端提交映射已更新", submission_id=remote_submission_id)
             imported += 1
             continue
 
@@ -258,6 +224,47 @@ def import_submissions(conn: sqlite3.Connection, gh: GitHubRepoClient, upload_di
         proof_bytes, _ = gh.get_bytes(proof_path)
         if proof_bytes is None:
             raise FileNotFoundError(f"GitHub 中缺少凭证文件: {proof_path}")
+        fingerprint = submission_fingerprint_from_payload(payload, sha256_hex(proof_bytes))
+        duplicate = conn.execute(
+            """
+            SELECT local_submission_id, remote_submission_id
+            FROM github_server_links
+            WHERE username = ? AND submission_fingerprint = ?
+            """,
+            (user_payload["username"], fingerprint),
+        ).fetchone()
+        if duplicate and duplicate["local_submission_id"]:
+            conn.execute(
+                """
+                INSERT INTO github_server_links (
+                    remote_submission_id, username, local_submission_id, submission_sha, review_sha, state_sha, submission_fingerprint, imported_at
+                )
+                VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)
+                ON CONFLICT(remote_submission_id) DO UPDATE SET
+                    username = excluded.username,
+                    local_submission_id = excluded.local_submission_id,
+                    submission_sha = excluded.submission_sha,
+                    submission_fingerprint = excluded.submission_fingerprint
+                """,
+                (
+                    remote_submission_id,
+                    user_payload["username"],
+                    duplicate["local_submission_id"],
+                    submission_sha,
+                    fingerprint,
+                    utc_now_iso(),
+                ),
+            )
+            append_sync_log(
+                log_path,
+                "warning",
+                "submission-dedupe",
+                "检测到重复提交，已复用已有本地记录",
+                submission_id=remote_submission_id,
+                duplicate_of=duplicate["remote_submission_id"],
+            )
+            imported += 1
+            continue
         suffix = Path(payload["evidence"]["name"]).suffix or mimetypes.guess_extension(payload["evidence"]["mime"] or "") or ".bin"
         local_proof_name = f"github-{remote_submission_id}{suffix}"
         (upload_dir / local_proof_name).write_bytes(proof_bytes)
@@ -283,22 +290,24 @@ def import_submissions(conn: sqlite3.Connection, gh: GitHubRepoClient, upload_di
         conn.execute(
             """
             INSERT INTO github_server_links (
-                remote_submission_id, username, local_submission_id, submission_sha, review_sha, state_sha, imported_at
+                remote_submission_id, username, local_submission_id, submission_sha, review_sha, state_sha, submission_fingerprint, imported_at
             )
-            VALUES (?, ?, ?, ?, NULL, NULL, ?)
+            VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)
             ON CONFLICT(remote_submission_id) DO UPDATE SET
                 username = excluded.username,
                 local_submission_id = excluded.local_submission_id,
-                submission_sha = excluded.submission_sha
+                submission_sha = excluded.submission_sha,
+                submission_fingerprint = excluded.submission_fingerprint
             """,
-            (remote_submission_id, user_payload["username"], local_submission_id, submission_sha, utc_now_iso()),
+            (remote_submission_id, user_payload["username"], local_submission_id, submission_sha, fingerprint, utc_now_iso()),
         )
+        append_sync_log(log_path, "info", "submission-import", "已导入新的学习提交", submission_id=remote_submission_id)
         imported += 1
     conn.commit()
     return imported
 
 
-def export_reviews(conn: sqlite3.Connection, gh: GitHubRepoClient) -> int:
+def export_reviews(conn: sqlite3.Connection, gh: GitHubRepoClient, *, log_path: Path) -> int:
     rows = conn.execute(
         """
         SELECT
@@ -331,16 +340,19 @@ def export_reviews(conn: sqlite3.Connection, gh: GitHubRepoClient) -> int:
                 "display_name": row["reviewer_display_name"] or "小和",
             },
         }
-        sha = gh.put_json(
+        action, sha = gh.put_json_if_changed(
             remote_path,
             payload,
             f"server: review {row['remote_submission_id']}",
-            row["review_sha"],
         )
         conn.execute(
             "UPDATE github_server_links SET review_sha = ? WHERE remote_submission_id = ?",
             (sha, row["remote_submission_id"]),
         )
+        if action == "unchanged":
+            append_sync_log(log_path, "info", "review-dedupe", "审核结果没有变化，跳过重复回写", submission_id=row["remote_submission_id"])
+        else:
+            append_sync_log(log_path, "info", "review-export", "审核结果已回写到 GitHub", submission_id=row["remote_submission_id"], action=action)
         exported += 1
     conn.commit()
     return exported
@@ -349,13 +361,16 @@ def export_reviews(conn: sqlite3.Connection, gh: GitHubRepoClient) -> int:
 def run_once(args: argparse.Namespace) -> str:
     db_path = Path(args.db)
     upload_dir = Path(args.upload_dir)
+    log_path = Path(getattr(args, "log_path", log_path_for(db_path)))
     initialize_admin_app(db_path, upload_dir)
     gh = GitHubRepoClient(args.owner, args.repo, args.token, args.branch)
     with connect_db(db_path) as conn:
-        states = import_state_snapshots(conn, gh)
-        submissions = import_submissions(conn, gh, upload_dir)
-        reviews = export_reviews(conn, gh)
-    return f"sync-server ok states={states} submissions={submissions} reviews={reviews}"
+        states = import_state_snapshots(conn, gh, log_path=log_path)
+        submissions = import_submissions(conn, gh, upload_dir, log_path=log_path)
+        reviews = export_reviews(conn, gh, log_path=log_path)
+    summary = f"sync-server ok states={states} submissions={submissions} reviews={reviews}"
+    append_sync_log(log_path, "info", "sync-round", summary)
+    return summary
 
 
 def parse_args() -> argparse.Namespace:
@@ -367,6 +382,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--token", default="", help="具备 contents 读写权限的 GitHub token")
     parser.add_argument("--db", default=str(root / "math-quest.db"), help="小和本地 SQLite 路径")
     parser.add_argument("--upload-dir", default=str(root / "uploads"), help="小和本地凭证目录")
+    parser.add_argument("--log-path", default=str(root / "github-sync-server.log"), help="同步日志路径")
     parser.add_argument("--interval", type=int, default=300, help="轮询间隔秒数，默认 300")
     parser.add_argument("--once", action="store_true", help="只同步一次")
     args = parser.parse_args()

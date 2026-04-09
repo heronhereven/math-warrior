@@ -21,6 +21,7 @@ def build_math_quest_app(port: int = 0) -> MathQuestApp:
         db_path=data_root / "math-quest.db",
         static_dir=resource_root(),
         upload_dir=data_root / "uploads",
+        sync_signal_path=data_root / "sync-now.flag",
         admin_username="admin",
         admin_password="admin123456",
         host="127.0.0.1",
@@ -236,6 +237,7 @@ class DesktopWindow:
             interval=int(config.get("interval", 300) or 300),
             sync_once=self._run_sync_once,
             on_status=self._set_sync_status,
+            signal_path=self.data_root / "sync-now.flag",
         )
         self.sync_worker.start()
         self.sync_status.set("GitHub 同步已启动，正在后台轮询。")

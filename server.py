@@ -436,6 +436,7 @@ class MathQuestApp:
         db_path: Path,
         static_dir: Path,
         upload_dir: Path | None = None,
+        sync_signal_path: Path | None = None,
         admin_username: str = "admin",
         admin_password: str = "admin123456",
         host: str = "127.0.0.1",
@@ -445,13 +446,22 @@ class MathQuestApp:
         self.static_dir = Path(static_dir)
         self.index_path = self.static_dir / "index.html"
         self.upload_dir = Path(upload_dir) if upload_dir is not None else self.static_dir / "uploads"
+        self.sync_signal_path = Path(sync_signal_path) if sync_signal_path is not None else None
         self.host = host
         self.port = port
         self.admin_username = admin_username
         self.admin_password = admin_password
         self.upload_dir.mkdir(parents=True, exist_ok=True)
+        if self.sync_signal_path is not None:
+            self.sync_signal_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
         self._ensure_admin_user()
+
+    def _touch_sync_signal(self) -> None:
+        if self.sync_signal_path is None:
+            return
+        self.sync_signal_path.parent.mkdir(parents=True, exist_ok=True)
+        self.sync_signal_path.write_text(utc_now_iso(), encoding="utf-8")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -657,6 +667,7 @@ class MathQuestApp:
             """,
             (user_id, payload, now),
         )
+        self._touch_sync_signal()
         return normalized
 
     def _submission_rollup(self, conn: sqlite3.Connection, user_id: int) -> dict[str, dict[str, int]]:
@@ -1052,6 +1063,7 @@ class MathQuestApp:
                                 "INSERT INTO user_states (user_id, state_json, updated_at) VALUES (?, ?, ?)",
                                 (user_id, json.dumps(default_state(), ensure_ascii=False), now),
                             )
+                            app._touch_sync_signal()
                             token = app._create_session(conn, user_id)
                             user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
@@ -1137,6 +1149,7 @@ class MathQuestApp:
                                 """,
                                 (user["id"], date_key, duration_minutes, note, evidence_name, evidence_mime, evidence_path, now),
                             )
+                            app._touch_sync_signal()
                             row = conn.execute(
                                 """
                                 SELECT study_submissions.*, users.username, users.display_name, users.is_admin
@@ -1212,6 +1225,7 @@ class MathQuestApp:
                                 """,
                                 (status_value, admin_note, user["id"], reviewed_at, submission_id),
                             )
+                            app._touch_sync_signal()
                             row = conn.execute(
                                 """
                                 SELECT study_submissions.*, users.username, users.display_name, users.is_admin
@@ -1277,6 +1291,7 @@ class MathQuestApp:
                         with app._connect() as conn:
                             sql = f"UPDATE users SET {', '.join(part for part, _ in updates)} WHERE id = ?"
                             conn.execute(sql, [*params, user["id"]])
+                            app._touch_sync_signal()
                             updated = conn.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
                         app._send_json(self, HTTPStatus.OK, {"message": "账号信息已更新", "user": app._public_user(updated)})
                         return
