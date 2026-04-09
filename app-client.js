@@ -1,58 +1,56 @@
 (function () {
-  const SAVE_DELAY = 600;
   const DAILY_GOAL_MINUTES = 120;
+  const SAVE_DELAY = 600;
+  const LEARNER_POLL_MS = 20000;
+  const ADMIN_POLL_MS = 30000;
+  const CIRCUMFERENCE = 2 * Math.PI * 52;
   const STAMP_POOL = [
-    { emoji: "🐹", rarity: 1, weight: 20, label: "仓鼠" },
-    { emoji: "🐰", rarity: 2, weight: 18, label: "兔兔" },
-    { emoji: "🐱", rarity: 3, weight: 15, label: "小猫" },
-    { emoji: "🐶", rarity: 4, weight: 12, label: "小狗" },
-    { emoji: "🦊", rarity: 5, weight: 9, label: "狐狸" },
-    { emoji: "🐼", rarity: 6, weight: 7, label: "熊猫" },
-    { emoji: "🦁", rarity: 7, weight: 5, label: "狮子" },
-    { emoji: "🦄", rarity: 8, weight: 3, label: "独角兽" },
-    { emoji: "🐥", rarity: 9, weight: 1, label: "小鸭子" },
+    { emoji: "🐹", rarity: 1, label: "仓鼠" },
+    { emoji: "🐰", rarity: 2, label: "兔兔" },
+    { emoji: "🐱", rarity: 3, label: "小猫" },
+    { emoji: "🐶", rarity: 4, label: "小狗" },
+    { emoji: "🦊", rarity: 5, label: "狐狸" },
+    { emoji: "🐼", rarity: 6, label: "熊猫" },
+    { emoji: "🦁", rarity: 7, label: "狮子" },
+    { emoji: "🦄", rarity: 8, label: "独角兽" },
+    { emoji: "🐥", rarity: 9, label: "小鸭子" },
   ];
-  let currentUser = null;
-  let saveTimer = null;
-  let saveInFlight = false;
-  let pendingSave = false;
-  let shellReady = false;
-  let bootEl = null;
-  let authEl = null;
-  let accountEl = null;
-  let originalRenderAll = null;
-  let adminUsers = [];
-  let adminSelectedUserId = null;
-  let adminDetailCache = new Map();
-  let adminRefreshTimer = null;
-  let mySubmissions = [];
-  let settingsEl = null;
-  let lastTotalXp = 0;
-  let lastStampCelebrationKey = null;
-  let submissionRefreshTimer = null;
+  const TASK_LABELS = {
+    correction: { title: "订正错题", copy: "把今天绊脚的题一个个哄顺。" },
+    difficulty: { title: "解决难点", copy: "把最卡的那一块掰开揉碎。" },
+    review: { title: "复习知识点", copy: "让会做的东西别偷偷溜走。" },
+  };
+  const LEVEL_AVATARS = ["🍜", "🥢", "🍥", "🍤", "🧋", "✨", "🏆", "👑"];
+  const LEVELS = [
+    { level: 1, name: "新手学徒", xp: 0 },
+    { level: 2, name: "初级探索者", xp: 100 },
+    { level: 3, name: "数学战士", xp: 250 },
+    { level: 4, name: "方程猎人", xp: 450 },
+    { level: 5, name: "积分法师", xp: 700 },
+    { level: 6, name: "极限骑士", xp: 1000 },
+    { level: 7, name: "微积分大师", xp: 1400 },
+    { level: 8, name: "数学传奇", xp: 1900 },
+  ];
 
-  function localDateKey(date = new Date()) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
-  }
-
-  function escapeHtml(value) {
-    return String(value ?? "")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#39;");
-  }
-
-  function formatDateTime(value) {
-    if (!value) return "—";
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return escapeHtml(value);
-    return parsed.toLocaleString("zh-CN", { hour12: false });
-  }
+  const app = {
+    user: null,
+    state: defaultState(),
+    submissions: [],
+    adminUsers: [],
+    adminDetailCache: new Map(),
+    adminSelectedUserId: null,
+    adminGroup: "pending",
+    learnerView: "dashboard",
+    calendarCursor: monthAnchor(),
+    saveTimer: null,
+    saveInFlight: false,
+    pendingSave: false,
+    checkinInFlight: false,
+    pollTimer: null,
+    lastTotalXp: 0,
+    booted: false,
+    latestStampDate: null,
+  };
 
   function defaultState() {
     return { totalXp: 0, streak: 0, lastDate: null, history: {} };
@@ -67,6 +65,18 @@
       energy: 0,
       xpEarned: 0,
       rewardShown: false,
+      checkin: { stamped: false, emoji: "", rarity: 0, label: "", stampedAt: null, comboBonusXp: 0, comboDays: 0, rewardXp: 0 },
+      status: {
+        goalMinutes: DAILY_GOAL_MINUTES,
+        approvedMinutes: 0,
+        pendingMinutes: 0,
+        rejectedMinutes: 0,
+        approvedCount: 0,
+        pendingCount: 0,
+        rejectedCount: 0,
+        progressState: "locked",
+        rewardState: "idle",
+      },
     };
   }
 
@@ -76,26 +86,102 @@
     return Math.max(minimum, Math.min(maximum, parsed));
   }
 
+  function localDateKey(date = new Date()) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  function monthAnchor(date = new Date()) {
+    return new Date(date.getFullYear(), date.getMonth(), 1);
+  }
+
+  function parseDateKey(dateKey) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey || ""))) return null;
+    const parsed = new Date(`${dateKey}T12:00:00`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  function formatDate(dateKey) {
+    const parsed = parseDateKey(dateKey);
+    if (!parsed) return dateKey || "—";
+    return parsed.toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "short" });
+  }
+
+  function formatDateTime(value) {
+    if (!value) return "—";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return String(value);
+    return parsed.toLocaleString("zh-CN", { hour12: false });
+  }
+
+  function formatMinutes(minutes) {
+    const safe = clampInt(minutes, 0, 10000, 0);
+    const hours = Math.floor(safe / 60);
+    const mins = safe % 60;
+    if (!hours) return `${mins} 分钟`;
+    if (!mins) return `${hours} 小时`;
+    return `${hours} 小时 ${mins} 分`;
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+
+  function normalizeCheckin(raw) {
+    const base = defaultDay().checkin;
+    if (!raw || typeof raw !== "object") return { ...base };
+    return {
+      stamped: Boolean(raw.stamped),
+      emoji: typeof raw.emoji === "string" ? raw.emoji : "",
+      rarity: clampInt(raw.rarity, 0, 10, 0),
+      label: typeof raw.label === "string" ? raw.label : "",
+      stampedAt: typeof raw.stampedAt === "string" ? raw.stampedAt : null,
+      comboBonusXp: clampInt(raw.comboBonusXp, 0, 200000, 0),
+      comboDays: clampInt(raw.comboDays, 0, 365, 0),
+      rewardXp: clampInt(raw.rewardXp, 0, 200000, 0),
+    };
+  }
+
+  function normalizeStatus(raw) {
+    const base = defaultDay().status;
+    if (!raw || typeof raw !== "object") return { ...base };
+    return {
+      goalMinutes: clampInt(raw.goalMinutes, 1, 720, DAILY_GOAL_MINUTES),
+      approvedMinutes: clampInt(raw.approvedMinutes, 0, 720, 0),
+      pendingMinutes: clampInt(raw.pendingMinutes, 0, 720, 0),
+      rejectedMinutes: clampInt(raw.rejectedMinutes, 0, 720, 0),
+      approvedCount: clampInt(raw.approvedCount, 0, 1000, 0),
+      pendingCount: clampInt(raw.pendingCount, 0, 1000, 0),
+      rejectedCount: clampInt(raw.rejectedCount, 0, 1000, 0),
+      progressState: typeof raw.progressState === "string" ? raw.progressState : "locked",
+      rewardState: typeof raw.rewardState === "string" ? raw.rewardState : "idle",
+    };
+  }
+
   function normalizeDay(raw) {
     const base = defaultDay();
     if (!raw || typeof raw !== "object") return base;
-
     if (Array.isArray(raw.segments)) {
       base.segments = raw.segments
         .map((item) => {
-          const start = clampInt(item?.s, 0, 180, 0);
-          const end = clampInt(item?.e, 0, 180, 0);
+          const start = clampInt(item?.s, 0, 720, 0);
+          const end = clampInt(item?.e, 0, 720, 0);
           return start < end ? { s: start, e: end } : null;
         })
         .filter(Boolean);
     }
-
     if (raw.tasks && typeof raw.tasks === "object") {
       Object.keys(base.tasks).forEach((key) => {
         base.tasks[key] = Boolean(raw.tasks[key]);
       });
     }
-
     if (raw.journal && typeof raw.journal === "object") {
       ["top", "stuck", "feel"].forEach((key) => {
         base.journal[key] = typeof raw.journal[key] === "string" ? raw.journal[key] : "";
@@ -104,92 +190,281 @@
         base.journal[key] = clampInt(raw.journal[key], 0, 5, 0);
       });
     }
-
     base.mood = clampInt(raw.mood, 0, 5, 0);
     base.energy = clampInt(raw.energy, 0, 5, 0);
-    base.xpEarned = clampInt(raw.xpEarned, 0, 100000, 0);
+    base.xpEarned = clampInt(raw.xpEarned, 0, 10000000, 0);
     base.rewardShown = Boolean(raw.rewardShown);
+    base.checkin = normalizeCheckin(raw.checkin);
+    base.status = normalizeStatus(raw.status);
     return base;
   }
 
   function normalizeState(raw) {
     const base = defaultState();
     if (!raw || typeof raw !== "object") return base;
+    base.totalXp = clampInt(raw.totalXp, 0, 10000000, 0);
     base.streak = clampInt(raw.streak, 0, 36500, 0);
     base.lastDate = typeof raw.lastDate === "string" ? raw.lastDate : null;
     if (raw.history && typeof raw.history === "object") {
       Object.entries(raw.history).forEach(([dateKey, day]) => {
-        if (typeof dateKey === "string") {
-          base.history[dateKey] = normalizeDay(day);
-        }
+        base.history[dateKey] = normalizeDay(day);
       });
     }
-    base.totalXp = Object.values(base.history).reduce((sum, day) => sum + (day.xpEarned || 0), 0);
     return base;
   }
 
-  function sumApprovedMinutes(day) {
-    return (day?.segments || []).reduce((sum, segment) => sum + (segment.e - segment.s), 0);
+  function editableStatePayload() {
+    const history = {};
+    Object.entries(app.state.history || {}).forEach(([dateKey, day]) => {
+      history[dateKey] = {
+        tasks: { ...day.tasks },
+        journal: { ...day.journal },
+        mood: day.mood,
+        energy: day.energy,
+        rewardShown: Boolean(day.rewardShown),
+      };
+    });
+    return { history };
   }
 
-  function computeStudyXp(minutes) {
-    if (minutes <= 0) return 0;
-    return Math.round(14 * (Math.exp(minutes / 95) - 1));
-  }
-
-  function computeDayProgress(day) {
-    const approvedMinutes = sumApprovedMinutes(day);
-    if (approvedMinutes <= 0) {
-      return { xp: 0, allDone: false, studyMins: 0, overAchieved: false };
+  function getLevelInfo(totalXp) {
+    let current = LEVELS[0];
+    for (const level of LEVELS) {
+      if (totalXp >= level.xp) current = level;
     }
-    let xp = computeStudyXp(approvedMinutes);
-    if (day.tasks?.correction) xp += XP_VAL.correction;
-    if (day.tasks?.difficulty) xp += XP_VAL.difficulty;
-    if (day.tasks?.review) xp += XP_VAL.review;
-    const journalCount = [day.journal?.top, day.journal?.stuck, day.journal?.feel].filter((value) => (value || "").trim()).length;
-    if (journalCount >= 1) xp += XP_VAL.journal;
-    const allDone = approvedMinutes >= DAILY_GOAL_MINUTES && day.tasks?.correction && day.tasks?.difficulty && day.tasks?.review;
-    if (allDone) xp += XP_VAL.allDone;
-    xp += Number(day.checkin?.comboBonusXp || 0);
-    return { xp, allDone, studyMins: approvedMinutes, overAchieved: approvedMinutes > DAILY_GOAL_MINUTES };
+    const index = LEVELS.findIndex((item) => item.level === current.level);
+    const next = LEVELS[index + 1] || null;
+    return { current, next, index };
   }
 
-  function pickStampAnimal() {
-    const totalWeight = STAMP_POOL.reduce((sum, item) => sum + item.weight, 0);
-    let roll = Math.random() * totalWeight;
-    for (const item of STAMP_POOL) {
-      roll -= item.weight;
-      if (roll <= 0) return item;
-    }
-    return STAMP_POOL[STAMP_POOL.length - 1];
+  function currentDayKey() {
+    return localDateKey();
   }
 
-  function ensureCheckin(day) {
-    if (!day.checkin || typeof day.checkin !== "object") {
-      day.checkin = { stamped: false, emoji: "", rarity: 0, stampedAt: null };
+  function ensureDay(dateKey = currentDayKey()) {
+    if (!app.state.history[dateKey]) {
+      app.state.history[dateKey] = defaultDay();
+    } else {
+      app.state.history[dateKey] = normalizeDay(app.state.history[dateKey]);
     }
-    return day.checkin;
+    return app.state.history[dateKey];
+  }
+
+  function approvedMinutes(day) {
+    return clampInt(day?.status?.approvedMinutes, 0, 720, 0);
+  }
+
+  function pendingMinutes(day) {
+    return clampInt(day?.status?.pendingMinutes, 0, 720, 0);
+  }
+
+  function countDoneTasks(day) {
+    return Object.values(day?.tasks || {}).filter(Boolean).length;
+  }
+
+  function journalCount(day) {
+    const journal = day?.journal || {};
+    return [journal.top, journal.stuck, journal.feel].filter((item) => String(item || "").trim()).length;
+  }
+
+  function isAllTasksDone(day) {
+    return countDoneTasks(day) === 3;
+  }
+
+  function api(path, options = {}) {
+    const request = { credentials: "same-origin", ...options };
+    const headers = new Headers(request.headers || {});
+    if (request.body && typeof request.body !== "string" && !(request.body instanceof FormData)) {
+      headers.set("Content-Type", "application/json");
+      request.body = JSON.stringify(request.body);
+    }
+    request.headers = headers;
+    return fetch(path, request).then(async (response) => {
+      const contentType = response.headers.get("Content-Type") || "";
+      const payload = contentType.includes("application/json") ? await response.json() : await response.text();
+      if (!response.ok) {
+        const error = new Error(typeof payload === "string" ? payload : payload.error || "请求失败");
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
+      }
+      return payload;
+    });
+  }
+
+  function setAuthMode(mode) {
+    document.querySelectorAll("[data-auth-mode]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.authMode === mode);
+    });
+    document.getElementById("login-form").classList.toggle("mq-hidden", mode !== "login");
+    document.getElementById("register-form").classList.toggle("mq-hidden", mode !== "register");
+    document.getElementById("auth-error").textContent = "";
+  }
+
+  function showBoot(text) {
+    document.getElementById("boot-screen").classList.remove("mq-hidden");
+    document.getElementById("boot-text").textContent = text;
+  }
+
+  function hideBoot() {
+    document.getElementById("boot-screen").classList.add("mq-hidden");
+  }
+
+  function showAuth(message = "") {
+    document.getElementById("auth-screen").classList.remove("mq-hidden");
+    document.getElementById("learner-app").classList.add("mq-hidden");
+    document.getElementById("admin-app").classList.add("mq-hidden");
+    document.getElementById("auth-error").textContent = message;
+    hideBoot();
+  }
+
+  function hideAuth() {
+    document.getElementById("auth-screen").classList.add("mq-hidden");
+    document.getElementById("auth-error").textContent = "";
+  }
+
+  function showToast(message, tone = "") {
+    const toast = document.getElementById("toast");
+    toast.textContent = message;
+    toast.className = `mq-toast show ${tone}`.trim();
+    window.clearTimeout(showToast.timer);
+    showToast.timer = window.setTimeout(() => {
+      toast.className = "mq-toast";
+    }, 2600);
   }
 
   function playStampSound() {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-    const context = new AudioCtx();
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) return;
+    const context = new AudioContextCtor();
     const oscillator = context.createOscillator();
     const gain = context.createGain();
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(90, context.currentTime);
-    oscillator.frequency.exponentialRampToValueAtTime(45, context.currentTime + 0.18);
+    oscillator.type = "triangle";
+    oscillator.frequency.setValueAtTime(120, context.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(50, context.currentTime + 0.18);
     gain.gain.setValueAtTime(0.001, context.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.35, context.currentTime + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.22);
+    gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.24);
     oscillator.connect(gain);
     gain.connect(context.destination);
     oscillator.start();
     oscillator.stop(context.currentTime + 0.25);
-    window.setTimeout(() => {
-      void context.close();
-    }, 300);
+    window.setTimeout(() => void context.close(), 350);
+  }
+
+  function setPollTimer() {
+    if (app.pollTimer) {
+      window.clearInterval(app.pollTimer);
+      app.pollTimer = null;
+    }
+    if (!app.user) return;
+    const interval = app.user.is_admin ? ADMIN_POLL_MS : LEARNER_POLL_MS;
+    app.pollTimer = window.setInterval(() => {
+      if (!app.user) return;
+      if (app.user.is_admin) {
+        void refreshAdminBundle(true);
+      } else {
+        void refreshLearnerBundle(true);
+      }
+    }, interval);
+  }
+
+  function mergeServerState(nextState, options = {}) {
+    const previousXp = app.state.totalXp || 0;
+    app.state = normalizeState(nextState);
+    if (options.animate && app.state.totalXp > previousXp) {
+      animateXpGain(app.state.totalXp - previousXp);
+    }
+    app.lastTotalXp = app.state.totalXp;
+  }
+
+  async function refreshLearnerBundle(silent = false) {
+    const [stateData, submissionData] = await Promise.all([api("/api/state"), api("/api/submissions/mine")]);
+    mergeServerState(stateData.state, { animate: !silent && app.booted });
+    app.submissions = Array.isArray(submissionData.submissions) ? submissionData.submissions : [];
+    renderLearner();
+  }
+
+  async function refreshAdminBundle(silent = false) {
+    const data = await api("/api/admin/users");
+    app.adminUsers = Array.isArray(data.users) ? data.users : [];
+    if (!app.adminUsers.length) {
+      app.adminSelectedUserId = null;
+      renderAdmin();
+      return;
+    }
+    if (!app.adminUsers.some((item) => item.user?.id === app.adminSelectedUserId)) {
+      app.adminSelectedUserId = app.adminUsers[0].user?.id || null;
+    }
+    renderAdmin();
+    if (app.adminSelectedUserId) {
+      await loadAdminDetail(app.adminSelectedUserId, !silent);
+    }
+  }
+
+  async function loadAdminDetail(userId, refresh = false) {
+    if (!refresh && app.adminDetailCache.has(userId)) {
+      renderAdmin();
+      return;
+    }
+    const detail = await api(`/api/admin/users/${userId}`);
+    app.adminDetailCache.set(userId, detail);
+    renderAdmin();
+  }
+
+  async function persistState() {
+    if (!app.user || app.user.is_admin) return;
+    if (app.saveInFlight) {
+      app.pendingSave = true;
+      return;
+    }
+    app.saveInFlight = true;
+    window.clearTimeout(app.saveTimer);
+    try {
+      const data = await api("/api/state", { method: "PUT", body: { state: editableStatePayload() } });
+      mergeServerState(data.state, { animate: false });
+      renderLearner();
+    } catch (error) {
+      if (error.status === 401) {
+        await handleLogout(false);
+        showAuth("登录已失效，请重新登录");
+        return;
+      }
+      showToast(error.payload?.error || "同步失败", "error");
+    } finally {
+      app.saveInFlight = false;
+      if (app.pendingSave) {
+        app.pendingSave = false;
+        void persistState();
+      }
+    }
+  }
+
+  function scheduleSave() {
+    window.clearTimeout(app.saveTimer);
+    app.saveTimer = window.setTimeout(() => {
+      void persistState();
+    }, SAVE_DELAY);
+  }
+
+  async function maybeAutoCheckin() {
+    if (!app.user || app.user.is_admin || app.checkinInFlight) return;
+    const dateKey = currentDayKey();
+    const day = ensureDay(dateKey);
+    if (!isAllTasksDone(day) || day.checkin.stamped) return;
+    app.checkinInFlight = true;
+    try {
+      const data = await api("/api/checkin", { method: "POST", body: { date_key: dateKey } });
+      mergeServerState(data.state, { animate: false });
+      app.latestStampDate = dateKey;
+      playStampSound();
+      renderLearner();
+      showToast(`${data.checkin?.emoji || "🫶"} 今天的印章盖好了，等小和点头就会发奖励`);
+    } catch (error) {
+      showToast(error.payload?.error || "自动盖章失败", "error");
+    } finally {
+      app.checkinInFlight = false;
+    }
   }
 
   function fileToDataUrl(file) {
@@ -201,453 +476,58 @@
     });
   }
 
-  function rebuildStudySection() {
-    const studySection = document.querySelector("#pane-today .section");
-    if (!studySection) return;
-    studySection.innerHTML = `
-      <div class="section-title">⏱ 学习圆环</div>
-      <div class="mq-ring-layout">
-        <div class="mq-ring-shell">
-          <svg class="mq-ring-svg" viewBox="0 0 180 180" aria-hidden="true">
-            <circle class="mq-ring-track" cx="90" cy="90" r="72"></circle>
-            <circle id="mq-ring-fill" class="mq-ring-fill" cx="90" cy="90" r="72"></circle>
-          </svg>
-          <div class="mq-ring-center">
-            <div class="study-total" id="study-total-disp">0m</div>
-            <div class="mq-ring-state" id="mq-ring-state">今日目标 120 分钟</div>
-            <div class="mq-ring-badge mq-hidden" id="mq-ring-badge">超额完成</div>
-          </div>
-        </div>
-        <div class="mq-study-stats">
-          <div class="mq-study-stat-card"><strong id="mq-approved-mins">0</strong><span>已被认可的分钟</span></div>
-          <div class="mq-study-stat-card"><strong id="mq-pending-count">0</strong><span>小和查看中</span></div>
-          <div class="mq-study-stat-card"><strong id="mq-study-xp">0</strong><span>时长 XP</span></div>
-        </div>
-      </div>
-
-      <div class="mq-upload-panel">
-        <div class="mq-upload-title">上传本次学习凭证</div>
-        <div class="mq-upload-grid">
-          <label>学习时长（分钟）<input id="mq-session-minutes" type="number" min="1" max="720" placeholder="例如 45"></label>
-          <label>学习日期<input id="mq-session-date" type="date"></label>
-        </div>
-        <label>补充说明<textarea id="mq-session-note" rows="2" placeholder="写一句这次学了什么，或者给小和留一句话"></textarea></label>
-        <label>上传凭证<input id="mq-session-evidence" type="file" accept="image/*,.pdf" /></label>
-        <div class="mq-upload-actions">
-          <button type="button" class="btn btn-gold" id="mq-submit-session">送出证明</button>
-          <div class="mq-upload-help">每次学习记录都需要附上凭证。等小和点头之后，它才会计入圆环、XP 和每日时长状态。</div>
-        </div>
-      </div>
-
-      <div id="mq-session-status" class="mq-session-status"></div>
-      <div id="mq-submission-list" class="mq-submission-list"></div>
-
-      <div id="study-pct" class="mq-hidden"></div>
-      <div class="bar-fill hp mq-hidden" id="study-bar"></div>
-      <div class="timeline mq-hidden" id="timeline"></div>
-      <div class="seg-chips mq-hidden" id="seg-chips"></div>
-    `;
-
-    document.getElementById("mq-session-date").value = localDateKey();
-    document.getElementById("mq-submit-session").addEventListener("click", () => {
-      void submitStudyProof();
-    });
-    renderStampLegend();
-  }
-
-  function renderStampLegend() {
-    const legendEl = document.getElementById("mq-checkin-rarity");
-    if (!legendEl) return;
-    legendEl.innerHTML = STAMP_POOL.slice()
-      .sort((left, right) => right.rarity - left.rarity)
-      .map(
-        (item) => `<span class="mq-stamp-legend-item ${item.rarity === 9 ? "top" : ""}">${item.emoji}<small>${escapeHtml(item.label)}</small></span>`,
-      )
-      .join("");
-  }
-
-  async function api(path, options = {}) {
-    const request = { credentials: "same-origin", ...options };
-    const headers = new Headers(request.headers || {});
-    if (request.body && typeof request.body !== "string" && !(request.body instanceof FormData)) {
-      headers.set("Content-Type", "application/json");
-      request.body = JSON.stringify(request.body);
-    }
-    request.headers = headers;
-
-    const response = await fetch(path, request);
-    const contentType = response.headers.get("Content-Type") || "";
-    const payload = contentType.includes("application/json") ? await response.json() : await response.text();
-    if (!response.ok) {
-      const error = new Error(typeof payload === "string" ? payload : payload.error || "请求失败");
-      error.status = response.status;
-      error.payload = payload;
-      throw error;
-    }
-    return payload;
-  }
-
-  function isAdmin() {
-    return Boolean(currentUser && currentUser.is_admin);
-  }
-
-  function ensureShell() {
-    if (shellReady) return;
-
-    document.body.insertAdjacentHTML(
-      "afterbegin",
-      `
-      <div id="mq-boot" class="mq-overlay">
-        <div class="mq-card">
-          <div class="mq-card-title mq-logo-title">MATH<br><span>QUEST</span> ⚔️</div>
-          <div class="mq-card-subtitle" id="mq-boot-text">正在连接服务器...</div>
-        </div>
-      </div>
-      <div id="mq-auth" class="mq-overlay mq-hidden">
-        <div class="mq-card">
-          <div class="mq-card-title mq-logo-title">MATH<br><span>QUEST</span> ⚔️</div>
-          <div class="mq-card-kicker">账号存档</div>
-          <div class="mq-card-subtitle">登录后，学习记录会和账号绑定。小和也能从观察台里看到大家的成长进度。</div>
-          <div class="mq-auth-switch">
-            <button type="button" id="mq-auth-tab-login" class="active">登录</button>
-            <button type="button" id="mq-auth-tab-register">注册</button>
-          </div>
-          <div id="mq-auth-error" class="mq-auth-error"></div>
-          <form id="mq-login-form" class="mq-auth-form">
-            <label>用户名<input id="mq-login-username" name="username" autocomplete="username" required></label>
-            <label>密码<input id="mq-login-password" name="password" type="password" autocomplete="current-password" required></label>
-            <div class="mq-auth-actions">
-              <span class="mq-account-sub">登录后即可同步学习存档和小和的查看进度</span>
-              <button type="submit" class="mq-auth-submit">登录</button>
-            </div>
-          </form>
-          <form id="mq-register-form" class="mq-auth-form mq-hidden">
-            <label>用户名<input id="mq-register-username" name="username" autocomplete="username" required></label>
-            <label>昵称<input id="mq-register-display-name" name="display_name" autocomplete="nickname" required></label>
-            <label>密码<input id="mq-register-password" name="password" type="password" autocomplete="new-password" required></label>
-            <div class="mq-auth-actions">
-              <span class="mq-account-sub">用户名仅允许字母、数字、下划线和减号</span>
-              <button type="submit" class="mq-auth-submit">注册并登录</button>
-            </div>
-          </form>
-        </div>
-      </div>
-      `,
-    );
-
-    const header = document.querySelector(".header");
-    header.insertAdjacentHTML(
-      "afterend",
-      `
-      <div id="mq-account" class="mq-account-bar mq-hidden">
-        <div class="mq-account-meta">
-          <div class="mq-account-name" id="mq-account-name"></div>
-          <div class="mq-account-sub" id="mq-account-sub"></div>
-        </div>
-        <div class="mq-account-actions">
-          <span id="mq-role-pill" class="mq-pill"></span>
-          <span id="mq-sync-pill" class="mq-pill">未同步</span>
-          <button type="button" id="mq-settings-btn" class="mq-mini-btn">账号设置</button>
-          <button type="button" id="mq-logout-btn" class="mq-mini-btn">退出登录</button>
-        </div>
-      </div>
-      `,
-    );
-
-    const heroCard = document.querySelector(".hero-card");
-    heroCard.insertAdjacentHTML(
-      "afterend",
-      `
-      <div id="mq-checkin-card" class="section mq-checkin-section">
-        <div class="section-title">📅 每日签到</div>
-        <div class="mq-checkin-head">
-          <div>
-            <div class="mq-checkin-title">印章月历</div>
-            <div class="mq-checkin-sub">完成今日清单后会自动盖章。下方圆点会告诉你时长状态，绿色是达标，金色是超额闪光。</div>
-          </div>
-          <div class="mq-checkin-rarity" id="mq-checkin-rarity"></div>
-        </div>
-        <div id="mq-checkin-calendar" class="mq-checkin-calendar"></div>
-      </div>
-      `,
-    );
-
-    const tabs = document.querySelector(".tabs");
-    tabs.querySelectorAll(".tab").forEach((button) => {
-      const onclick = button.getAttribute("onclick") || "";
-      const match = onclick.match(/switchTab\('(.+?)'\)/);
-      if (match) button.dataset.tab = match[1];
-    });
-    tabs.insertAdjacentHTML(
-      "beforeend",
-      `<button id="mq-admin-tab" class="tab mq-hidden" data-tab="admin" onclick="switchTab('admin')">🛡 管理</button>`,
-    );
-
-    const reportPane = document.getElementById("pane-report");
-    reportPane.insertAdjacentHTML(
-      "afterend",
-      `
-      <div id="pane-admin" class="pane" style="display:none">
-        <div class="section">
-          <div class="section-title">🛡 小和观察台</div>
-          <div class="mq-admin-toolbar">
-            <div>
-              <div class="mq-admin-toolbar-title">泡面侠状态巡航</div>
-              <div id="mq-admin-status" class="mq-admin-toolbar-sub">准备打开大家的成长小宇宙...</div>
-            </div>
-            <button type="button" id="mq-admin-refresh" class="btn btn-teal">立即刷新</button>
-          </div>
-          <div id="mq-admin-hq" class="mq-admin-hq"></div>
-          <div id="mq-admin-summary" class="mq-admin-summary"></div>
-          <div id="mq-admin-tabs" class="mq-admin-tabs"></div>
-          <div id="mq-admin-dashboard"></div>
-        </div>
-      </div>
-      `,
-    );
-
-    document.body.insertAdjacentHTML(
-      "beforeend",
-      `
-      <div id="mq-settings" class="mq-overlay mq-hidden">
-        <div class="mq-card">
-          <div class="mq-card-title mq-logo-title">MATH<br><span>QUEST</span> ⚔️</div>
-          <div class="mq-card-kicker">账号设置</div>
-          <div class="mq-card-subtitle">可以改成更喜欢的名字，也可以顺手把密码换掉。</div>
-          <div id="mq-settings-error" class="mq-auth-error"></div>
-          <form id="mq-settings-form" class="mq-auth-form">
-            <label>显示名称<input id="mq-settings-display-name" autocomplete="nickname"></label>
-            <label>当前密码<input id="mq-settings-current-password" type="password" autocomplete="current-password"></label>
-            <label>新密码<input id="mq-settings-new-password" type="password" autocomplete="new-password"></label>
-            <div class="mq-auth-actions">
-              <button type="button" id="mq-settings-cancel" class="mq-mini-btn">取消</button>
-              <button type="submit" class="mq-auth-submit">保存设置</button>
-            </div>
-          </form>
-        </div>
-      </div>
-      `,
-    );
-
-    bootEl = document.getElementById("mq-boot");
-    authEl = document.getElementById("mq-auth");
-    accountEl = document.getElementById("mq-account");
-    settingsEl = document.getElementById("mq-settings");
-
-    rebuildStudySection();
-
-    document.getElementById("mq-auth-tab-login").addEventListener("click", () => setAuthMode("login"));
-    document.getElementById("mq-auth-tab-register").addEventListener("click", () => setAuthMode("register"));
-    document.getElementById("mq-login-form").addEventListener("submit", handleLogin);
-    document.getElementById("mq-register-form").addEventListener("submit", handleRegister);
-    document.getElementById("mq-settings-btn").addEventListener("click", openSettings);
-    document.getElementById("mq-logout-btn").addEventListener("click", handleLogout);
-    document.getElementById("mq-settings-cancel").addEventListener("click", closeSettings);
-    document.getElementById("mq-settings-form").addEventListener("submit", handleSettingsSave);
-    document.getElementById("mq-admin-refresh").addEventListener("click", () => {
-      void refreshAdminOverview();
-    });
-    document.getElementById("mq-admin-tabs").addEventListener("click", (event) => {
-      const tab = event.target.closest("[data-admin-user-id]");
-      if (!tab) return;
-      const userId = Number.parseInt(tab.dataset.adminUserId || "", 10);
-      if (Number.isNaN(userId) || userId === adminSelectedUserId) return;
-      adminSelectedUserId = userId;
-      renderAdminTabs();
-      void loadAdminUserDashboard(userId, false);
-    });
-    document.getElementById("mq-admin-dashboard").addEventListener("click", (event) => {
-      const actionBtn = event.target.closest("[data-review-action]");
-      if (!actionBtn) return;
-      const submissionId = Number.parseInt(actionBtn.dataset.submissionId || "", 10);
-      const action = actionBtn.dataset.reviewAction;
-      if (!submissionId || !action) return;
-      const noteInput = document.getElementById(`mq-review-note-${submissionId}`);
-      const admin_note = noteInput ? noteInput.value.trim() : "";
-      void reviewSubmission(submissionId, action, admin_note);
-    });
-
-    originalRenderAll = renderAll;
-    calcDayXp = computeDayProgress;
-    renderAll = function () {
-      originalRenderAll();
-      renderStudyExperience();
-      renderSubmissionQueue();
-      renderCheckinCalendar();
-      maybeAutoCheckin();
-      syncUserChrome();
-    };
-
-    switchTab = function (name) {
-      document.querySelectorAll(".pane").forEach((pane) => {
-        pane.style.display = "none";
-      });
-      document.querySelectorAll(".tab").forEach((tab) => {
-        tab.classList.remove("active");
-      });
-      const pane = document.getElementById(`pane-${name}`);
-      if (pane) pane.style.display = "block";
-      const activeTab = document.querySelector(`.tab[data-tab="${name}"]`);
-      if (activeTab) activeTab.classList.add("active");
-      setAdminAutoRefresh(name === "admin");
-      if (name === "status" || name === "history" || name === "report") {
-        renderAll();
-      }
-      if (name === "admin") {
-        void refreshAdminOverview();
-      }
-    };
-
-    todayKey = function () {
-      return localDateKey();
-    };
-
-    save = function (nextState) {
-      state = normalizeState(nextState);
-      if (!currentUser) return;
-      updateSyncPill("同步中...", false);
-      clearTimeout(saveTimer);
-      saveTimer = window.setTimeout(() => {
-        void persistState();
-      }, SAVE_DELAY);
-    };
-
-    shellReady = true;
-  }
-
-  function setAuthMode(mode) {
-    document.getElementById("mq-auth-tab-login").classList.toggle("active", mode === "login");
-    document.getElementById("mq-auth-tab-register").classList.toggle("active", mode === "register");
-    document.getElementById("mq-login-form").classList.toggle("mq-hidden", mode !== "login");
-    document.getElementById("mq-register-form").classList.toggle("mq-hidden", mode !== "register");
-    document.getElementById("mq-auth-error").textContent = "";
-  }
-
-  function showBoot(text) {
-    bootEl.classList.remove("mq-hidden");
-    document.getElementById("mq-boot-text").textContent = text;
-  }
-
-  function hideBoot() {
-    bootEl.classList.add("mq-hidden");
-  }
-
-  function showAuth(message = "") {
-    document.body.classList.remove("mq-ready");
-    authEl.classList.remove("mq-hidden");
-    closeSettings();
-    setSubmissionAutoRefresh(false);
-    hideBoot();
-    document.getElementById("mq-auth-error").textContent = message;
-  }
-
-  function hideAuth() {
-    authEl.classList.add("mq-hidden");
-    document.getElementById("mq-auth-error").textContent = "";
-  }
-
-  function openSettings() {
-    if (!currentUser) return;
-    document.getElementById("mq-settings-display-name").value = currentUser.display_name || "";
-    document.getElementById("mq-settings-current-password").value = "";
-    document.getElementById("mq-settings-new-password").value = "";
-    document.getElementById("mq-settings-error").textContent = "";
-    settingsEl.classList.remove("mq-hidden");
-  }
-
-  function closeSettings() {
-    settingsEl.classList.add("mq-hidden");
-    document.getElementById("mq-settings-error").textContent = "";
-  }
-
-  function updateSyncPill(text, isError) {
-    const pill = document.getElementById("mq-sync-pill");
-    pill.textContent = text;
-    pill.classList.toggle("error", Boolean(isError));
-  }
-
-  function syncUserChrome() {
-    const heroName = document.querySelector(".hero-name");
-    if (!currentUser) {
-      if (heroName) heroName.textContent = "MATH WARRIOR";
-      accountEl.classList.add("mq-hidden");
-      document.getElementById("mq-admin-tab").classList.add("mq-hidden");
-      setAdminAutoRefresh(false);
+  async function submitProof(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const minutes = clampInt(form.querySelector("[name='duration_minutes']").value, 0, 720, 0);
+    const dateKey = form.querySelector("[name='date_key']").value || currentDayKey();
+    const note = form.querySelector("[name='note']").value.trim();
+    const file = form.querySelector("[name='evidence']").files?.[0];
+    if (!minutes) {
+      showToast("先填一个有效的学习时长", "error");
       return;
     }
-
-    if (heroName) heroName.textContent = currentUser.display_name;
-    accountEl.classList.remove("mq-hidden");
-    document.getElementById("mq-account-name").textContent = currentUser.display_name;
-    document.getElementById("mq-account-sub").textContent = `@${currentUser.username} · 创建于 ${formatDateTime(currentUser.created_at)}`;
-    document.getElementById("mq-role-pill").textContent = currentUser.is_admin ? "小和" : "泡面侠";
-    document.getElementById("mq-role-pill").classList.toggle("admin", Boolean(currentUser.is_admin));
-    document.getElementById("mq-admin-tab").classList.toggle("mq-hidden", !currentUser.is_admin);
-  }
-
-  async function persistState() {
-    if (!currentUser) return;
-    if (saveInFlight) {
-      pendingSave = true;
+    if (!file) {
+      showToast("每次送出证明都要附上凭证", "error");
       return;
     }
-
-    saveInFlight = true;
-    clearTimeout(saveTimer);
+    const button = form.querySelector("button[type='submit']");
+    button.disabled = true;
+    button.textContent = "送出中...";
     try {
-      const data = await api("/api/state", { method: "PUT", body: { state } });
-      state = normalizeState(data.state);
-      updateSyncPill("已同步", false);
+      const evidenceData = await fileToDataUrl(file);
+      await api("/api/submissions", {
+        method: "POST",
+        body: {
+          date_key: dateKey,
+          duration_minutes: minutes,
+          note,
+          evidence_name: file.name || "proof",
+          evidence_data: evidenceData,
+        },
+      });
+      form.reset();
+      form.querySelector("[name='date_key']").value = currentDayKey();
+      await refreshLearnerBundle(true);
+      showToast("证明已经送到小和桌上啦");
     } catch (error) {
-      if (error.status === 401) {
-        currentUser = null;
-        state = defaultState();
-        syncUserChrome();
-        showAuth("登录已失效，请重新登录");
-        return;
-      }
-      updateSyncPill("同步失败", true);
+      showToast(error.payload?.error || "送出失败", "error");
     } finally {
-      saveInFlight = false;
-      if (pendingSave) {
-        pendingSave = false;
-        void persistState();
-      }
-    }
-  }
-
-  async function loadStudyBundle() {
-    const [stateData, submissionData] = await Promise.all([api("/api/state"), api("/api/submissions/mine")]);
-    state = normalizeState(stateData.state);
-    mySubmissions = Array.isArray(submissionData.submissions) ? submissionData.submissions : [];
-  }
-
-  async function finishSession(user, toastMessage) {
-    currentUser = user;
-    syncUserChrome();
-    showBoot("正在加载任务数据...");
-    try {
-      await loadStudyBundle();
-      setSubmissionAutoRefresh(true);
-      document.body.classList.add("mq-ready");
-      hideAuth();
-      renderAll();
-      updateSyncPill("已同步", false);
-      hideBoot();
-      if (toastMessage) showToast(toastMessage);
-    } catch (error) {
-      showAuth(error.payload?.error || "读取数据失败");
+      button.disabled = false;
+      button.textContent = "送出学习证明";
     }
   }
 
   async function handleLogin(event) {
     event.preventDefault();
-    const username = document.getElementById("mq-login-username").value.trim();
-    const password = document.getElementById("mq-login-password").value;
+    const username = document.getElementById("login-username").value.trim();
+    const password = document.getElementById("login-password").value;
+    showBoot("正在打开你的存档...");
     try {
-      showBoot("正在登录...");
       const data = await api("/api/auth/login", { method: "POST", body: { username, password } });
-      await finishSession(data.user, "登录成功");
+      app.user = data.user;
+      hideAuth();
+      await afterLogin();
     } catch (error) {
       showAuth(error.payload?.error || "登录失败");
     }
@@ -655,745 +535,880 @@
 
   async function handleRegister(event) {
     event.preventDefault();
-    const username = document.getElementById("mq-register-username").value.trim();
-    const display_name = document.getElementById("mq-register-display-name").value.trim();
-    const password = document.getElementById("mq-register-password").value;
+    const username = document.getElementById("register-username").value.trim();
+    const displayName = document.getElementById("register-display-name").value.trim();
+    const password = document.getElementById("register-password").value;
+    showBoot("正在准备你的新冒险...");
     try {
-      showBoot("正在注册...");
       const data = await api("/api/auth/register", {
         method: "POST",
-        body: { username, display_name, password },
+        body: { username, display_name: displayName, password },
       });
-      await finishSession(data.user, "注册成功");
+      app.user = data.user;
+      hideAuth();
+      await afterLogin();
     } catch (error) {
       showAuth(error.payload?.error || "注册失败");
     }
   }
 
-  async function handleLogout() {
-    clearTimeout(saveTimer);
-    try {
-      if (currentUser) {
+  async function handleLogout(showMessage = true) {
+    window.clearTimeout(app.saveTimer);
+    if (app.user && !app.user.is_admin) {
+      try {
         await persistState();
+      } catch (_error) {
+        // ignore
       }
-    } catch (_error) {
-      // Ignore save errors on logout and continue clearing the session.
     }
-
     try {
       await api("/api/auth/logout", { method: "POST" });
     } catch (_error) {
-      // Best-effort logout.
+      // ignore
     }
-
-    currentUser = null;
-    state = defaultState();
-    adminUsers = [];
-    adminSelectedUserId = null;
-    adminDetailCache.clear();
-    mySubmissions = [];
-    setSubmissionAutoRefresh(false);
-    setAdminAutoRefresh(false);
-    syncUserChrome();
-    showAuth("已退出登录");
-    setAuthMode("login");
+    app.user = null;
+    app.state = defaultState();
+    app.submissions = [];
+    app.adminUsers = [];
+    app.adminSelectedUserId = null;
+    app.adminDetailCache.clear();
+    setPollTimer();
+    if (showMessage) showToast("已经退出啦");
+    showAuth("");
   }
 
-  async function handleSettingsSave(event) {
-    event.preventDefault();
-    const display_name = document.getElementById("mq-settings-display-name").value.trim();
-    const current_password = document.getElementById("mq-settings-current-password").value;
-    const new_password = document.getElementById("mq-settings-new-password").value;
-    try {
-      const data = await api("/api/me", {
-        method: "PUT",
-        body: { display_name, current_password, new_password },
-      });
-      currentUser = data.user;
-      syncUserChrome();
-      closeSettings();
-      showToast("账号信息已更新");
-    } catch (error) {
-      document.getElementById("mq-settings-error").textContent = error.payload?.error || "保存失败";
-    }
-  }
-
-  async function submitStudyProof() {
-    const minutes = Number.parseInt(document.getElementById("mq-session-minutes").value || "", 10);
-    const date_key = document.getElementById("mq-session-date").value || localDateKey();
-    const note = document.getElementById("mq-session-note").value.trim();
-    const file = document.getElementById("mq-session-evidence").files?.[0];
-    const statusEl = document.getElementById("mq-session-status");
-    if (!minutes || minutes < 1) {
-      statusEl.innerHTML = `<div class="mq-progress-card error">请先填写有效的学习时长。</div>`;
-      return;
-    }
-    if (!file) {
-      statusEl.innerHTML = `<div class="mq-progress-card error">每次上传都需要附上凭证。</div>`;
-      return;
-    }
-
-    statusEl.innerHTML = `
-      <div class="mq-progress-card">
-        <div class="mq-progress-title">上传中</div>
-        <div class="mq-progress-steps">
-          <span class="active">1 送出证明</span>
-          <span>2 小和查看中</span>
-          <span>3 注入圆环</span>
-        </div>
-      </div>
-    `;
-
-    try {
-      const evidence_data = await fileToDataUrl(file);
-      await api("/api/submissions", {
-        method: "POST",
-        body: {
-          date_key,
-          duration_minutes: minutes,
-          note,
-          evidence_data,
-          evidence_name: file.name,
-        },
-      });
-      document.getElementById("mq-session-minutes").value = "";
-      document.getElementById("mq-session-note").value = "";
-      document.getElementById("mq-session-evidence").value = "";
-      await loadStudyBundle();
-      renderAll();
-      statusEl.innerHTML = `
-        <div class="mq-progress-card success">
-          <div class="mq-progress-title">小和已经收到啦</div>
-          <div class="mq-progress-steps">
-            <span class="done">1 送出证明</span>
-            <span class="active">2 小和查看中</span>
-            <span>3 注入圆环</span>
-          </div>
-        </div>
-      `;
-      showToast("凭证已经送到小和手上啦");
-    } catch (error) {
-      statusEl.innerHTML = `<div class="mq-progress-card error">${escapeHtml(error.payload?.error || error.message)}</div>`;
-    }
-  }
-
-  function getSubmissionStatusLabel(status) {
-    if (status === "approved") return "小和赞许了你的工作！";
-    if (status === "rejected") return "小和想再看看补充证明";
-    return "小和正在认真看";
-  }
-
-  function renderSubmissionQueue() {
-    const listEl = document.getElementById("mq-submission-list");
-    const statusEl = document.getElementById("mq-session-status");
-    if (!listEl) return;
-
-    const todayItems = mySubmissions.filter((item) => item.date_key === localDateKey());
-    const pendingCount = mySubmissions.filter((item) => item.status === "pending").length;
-    const latest = mySubmissions[0];
-    if (!statusEl.innerHTML && latest) {
-      statusEl.innerHTML = `
-        <div class="mq-progress-card ${latest.status}">
-          <div class="mq-progress-title">${getSubmissionStatusLabel(latest.status)}</div>
-          <div class="mq-progress-steps">
-            <span class="done">1 送出证明</span>
-            <span class="${latest.status === "pending" ? "active" : "done"}">2 小和查看中</span>
-            <span class="${latest.status === "approved" ? "active done" : ""}">3 注入圆环</span>
-          </div>
-        </div>
-      `;
-    }
-
-    if (!mySubmissions.length) {
-      listEl.innerHTML = `<div class="mq-admin-empty">今天先送出一条学习证明吧。等小和点头之后，圆环和月历就会一起亮起来。</div>`;
-      document.getElementById("mq-pending-count").textContent = String(pendingCount);
-      return;
-    }
-
-    listEl.innerHTML = `
-      <div class="mq-submission-list-title">学习证明小队列</div>
-      ${mySubmissions
-        .slice(0, 8)
-        .map(
-          (item) => `
-            <div class="mq-submission-card ${item.status}">
-              <div class="mq-submission-top">
-                <div>
-                  <div class="mq-submission-minutes">${item.duration_minutes} 分钟</div>
-                  <div class="mq-submission-meta">${escapeHtml(item.date_key)} · ${formatDateTime(item.created_at)}</div>
-                </div>
-                <span class="mq-submission-badge ${item.status}">${getSubmissionStatusLabel(item.status)}</span>
-              </div>
-              ${item.note ? `<div class="mq-submission-note">${escapeHtml(item.note)}</div>` : ""}
-              <div class="mq-submission-actions">
-                <a class="mq-mini-link" href="${item.evidence_url}" target="_blank" rel="noreferrer">查看凭证</a>
-                ${item.admin_note ? `<span class="mq-submission-admin-note">小和留言：${escapeHtml(item.admin_note)}</span>` : ""}
-              </div>
-            </div>
-          `,
-        )
-        .join("")}
-    `;
-    document.getElementById("mq-pending-count").textContent = String(pendingCount);
-  }
-
-  function triggerXpCelebration(amount) {
-    if (!amount || amount <= 0) return;
-    const bar = document.getElementById("xp-bar");
-    if (!bar) return;
-    const rect = bar.getBoundingClientRect();
-    const count = Math.max(8, Math.min(32, Math.round(amount / 4)));
-    for (let index = 0; index < count; index += 1) {
-      const particle = document.createElement("div");
-      particle.className = "mq-exp-particle";
-      particle.textContent = "EXP";
-      particle.style.left = `${rect.left + window.scrollX + Math.random() * rect.width}px`;
-      particle.style.top = `${rect.top + window.scrollY + 36 + Math.random() * 70}px`;
-      particle.style.animationDelay = `${index * 20}ms`;
-      document.body.appendChild(particle);
-      window.setTimeout(() => particle.remove(), 1600);
-    }
-    bar.classList.remove("mq-bar-burst");
-    void bar.offsetWidth;
-    bar.classList.add("mq-bar-burst");
-  }
-
-  spawnXpPopup = function (text) {
-    const amount = Number.parseInt(String(text).replace(/[^\d]/g, ""), 10) || 0;
-    triggerXpCelebration(amount);
-  };
-
-  function renderStudyExperience() {
-    const day = getDay();
-    const progress = computeDayProgress(day);
-    const approvedMinutes = progress.studyMins;
-    const pct = Math.min(100, (approvedMinutes / DAILY_GOAL_MINUTES) * 100);
-    const ringFill = document.getElementById("mq-ring-fill");
-    const ringState = document.getElementById("mq-ring-state");
-    const ringBadge = document.getElementById("mq-ring-badge");
-    const circumference = 2 * Math.PI * 72;
-    const progressRatio = Math.min(1, pct / 100);
-    ringFill.style.strokeDasharray = `${circumference}`;
-    ringFill.style.strokeDashoffset = `${circumference * (1 - progressRatio)}`;
-    ringFill.classList.toggle("gold", approvedMinutes > DAILY_GOAL_MINUTES);
-    ringFill.classList.toggle("green", approvedMinutes >= DAILY_GOAL_MINUTES && approvedMinutes <= DAILY_GOAL_MINUTES);
-    document.getElementById("mq-approved-mins").textContent = String(approvedMinutes);
-    document.getElementById("mq-study-xp").textContent = String(computeStudyXp(approvedMinutes));
-    if (approvedMinutes <= 0) {
-      ringState.textContent = "小和点头之前，圆环还在静静等待";
-      ringBadge.classList.add("mq-hidden");
-    } else if (approvedMinutes > DAILY_GOAL_MINUTES) {
-      ringState.textContent = `超额 ${approvedMinutes - DAILY_GOAL_MINUTES} 分钟`;
-      ringBadge.classList.remove("mq-hidden");
-    } else if (approvedMinutes >= DAILY_GOAL_MINUTES) {
-      ringState.textContent = "今日时长目标完成";
-      ringBadge.classList.add("mq-hidden");
+  async function afterLogin() {
+    app.calendarCursor = monthAnchor();
+    app.adminDetailCache.clear();
+    app.adminSelectedUserId = null;
+    app.lastTotalXp = 0;
+    if (app.user.is_admin) {
+      await refreshAdminBundle();
+      document.getElementById("learner-app").classList.add("mq-hidden");
+      document.getElementById("admin-app").classList.remove("mq-hidden");
     } else {
-      ringState.textContent = `距离目标还差 ${DAILY_GOAL_MINUTES - approvedMinutes} 分钟`;
-      ringBadge.classList.add("mq-hidden");
+      await refreshLearnerBundle();
+      document.getElementById("admin-app").classList.add("mq-hidden");
+      document.getElementById("learner-app").classList.remove("mq-hidden");
     }
-
-    const currentTotalXp = state.totalXp || 0;
-    if (currentTotalXp > lastTotalXp) {
-      triggerXpCelebration(currentTotalXp - lastTotalXp);
-    }
-    lastTotalXp = currentTotalXp;
+    setPollTimer();
+    app.booted = true;
+    hideBoot();
   }
 
-  function renderCheckinCalendar() {
-    const calendarEl = document.getElementById("mq-checkin-calendar");
-    if (!calendarEl) return;
-    const now = new Date();
-    const first = new Date(now.getFullYear(), now.getMonth(), 1);
-    const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    const startWeekday = first.getDay() || 7;
-    const days = [];
-    for (let index = 1; index < startWeekday; index += 1) {
-      days.push(`<div class="mq-calendar-cell ghost"></div>`);
-    }
-
-    for (let dayNumber = 1; dayNumber <= last.getDate(); dayNumber += 1) {
-      const date = new Date(now.getFullYear(), now.getMonth(), dayNumber);
-      const dateKey = localDateKey(date);
-      const dayState = state.history?.[dateKey];
-      const checkin = dayState ? ensureCheckin(dayState) : null;
-      const approvedMinutes = dayState ? sumApprovedMinutes(dayState) : 0;
-      const goalClass = approvedMinutes <= 0 ? "idle" : approvedMinutes > DAILY_GOAL_MINUTES ? "gold" : approvedMinutes >= DAILY_GOAL_MINUTES ? "green" : "red";
-      const stamped = Boolean(checkin?.stamped);
-      const stampEmoji = stamped ? checkin.emoji : "";
-      const animateClass = lastStampCelebrationKey === dateKey ? "stamp" : "";
-      days.push(`
-        <div class="mq-calendar-cell ${dateKey === localDateKey() ? "today" : ""}">
-          <div class="mq-calendar-day">${dayNumber}</div>
-          <div class="mq-calendar-ring ${stamped ? goalClass : ""}">
-            <div class="mq-calendar-stamp ${animateClass}">${escapeHtml(stampEmoji)}</div>
-          </div>
-        </div>
-      `);
-    }
-
-    calendarEl.innerHTML = `
-      <div class="mq-calendar-week">一</div>
-      <div class="mq-calendar-week">二</div>
-      <div class="mq-calendar-week">三</div>
-      <div class="mq-calendar-week">四</div>
-      <div class="mq-calendar-week">五</div>
-      <div class="mq-calendar-week">六</div>
-      <div class="mq-calendar-week">日</div>
-      ${days.join("")}
-    `;
-    lastStampCelebrationKey = null;
-  }
-
-  function maybeAutoCheckin() {
-    const day = getDay();
-    const checkin = ensureCheckin(day);
-    const tasksDone = Boolean(day.tasks?.correction && day.tasks?.difficulty && day.tasks?.review);
-    if (!tasksDone || checkin.stamped) return;
-
-    const stamp = pickStampAnimal();
-    checkin.stamped = true;
-    checkin.emoji = stamp.emoji;
-    checkin.rarity = stamp.rarity;
-    checkin.stampedAt = new Date().toISOString();
-
-    let comboDays = 1;
-    let cursor = new Date();
-    cursor.setDate(cursor.getDate() - 1);
-    while (true) {
-      const previousKey = localDateKey(cursor);
-      const previous = state.history?.[previousKey]?.checkin;
-      if (!previous?.stamped || previous.emoji !== stamp.emoji) break;
-      comboDays += 1;
-      cursor.setDate(cursor.getDate() - 1);
-    }
-    checkin.comboDays = comboDays;
-    checkin.comboBonusXp = comboDays > 1 ? 30 * stamp.rarity * 2 ** Math.max(0, comboDays - 2) : 0;
-    lastStampCelebrationKey = localDateKey();
-    playStampSound();
-    renderCheckinCalendar();
-    showToast(`${stamp.emoji} 今日签到成功，等小和点头后就能结算奖励`);
-    save(state);
-    originalRenderAll();
-    renderStudyExperience();
-    renderSubmissionQueue();
-    renderCheckinCalendar();
-    syncUserChrome();
-  }
-
-  function setAdminStatus(text) {
-    const statusEl = document.getElementById("mq-admin-status");
-    if (statusEl) statusEl.textContent = text;
-  }
-
-  function setSubmissionAutoRefresh(enabled) {
-    if (submissionRefreshTimer) {
-      window.clearInterval(submissionRefreshTimer);
-      submissionRefreshTimer = null;
-    }
-    if (!enabled || !currentUser) return;
-    submissionRefreshTimer = window.setInterval(async () => {
-      if (!currentUser) return;
-      try {
-        await loadStudyBundle();
-        renderAll();
-      } catch (_error) {
-        // Silent retry loop for review state sync.
-      }
-    }, 20000);
-  }
-
-  function setAdminAutoRefresh(enabled) {
-    if (adminRefreshTimer) {
-      window.clearInterval(adminRefreshTimer);
-      adminRefreshTimer = null;
-    }
-    if (!enabled || !isAdmin()) return;
-    adminRefreshTimer = window.setInterval(() => {
-      void refreshAdminOverview(true);
-    }, 30000);
-  }
-
-  function sumStudyMinutes(day) {
-    return (day?.segments || []).reduce((sum, segment) => sum + (segment.e - segment.s), 0);
-  }
-
-  function countTasks(day) {
-    return Object.values(day?.tasks || {}).filter(Boolean).length;
-  }
-
-  function countJournal(day) {
-    const journal = day?.journal || {};
-    return [journal.top, journal.stuck, journal.feel].filter((value) => (value || "").trim()).length;
-  }
-
-  function scorePercent(value, max) {
-    if (!max) return 0;
-    return Math.max(0, Math.min(100, Math.round((value / max) * 100)));
-  }
-
-  function getSortedHistoryKeys(userState) {
-    return Object.keys(userState?.history || {}).sort((left, right) => right.localeCompare(left));
-  }
-
-  function getDefaultAdminUser(users) {
-    return users.find((item) => !item.user?.is_admin) || users[0] || null;
-  }
-
-  function renderAdminHQ(users) {
-    const hqEl = document.getElementById("mq-admin-hq");
-    if (!hqEl) return;
-    if (!Array.isArray(users) || users.length === 0) {
-      hqEl.innerHTML = "";
-      return;
-    }
-
-    const pendingTotal = users.reduce((sum, item) => sum + (item.pending_count || 0), 0);
-    const overAchievers = users.filter((item) => {
-      const latest = item.recent_days?.[0];
-      return latest && latest.studyMinutes > DAILY_GOAL_MINUTES;
-    }).length;
-    const quietUsers = users.filter((item) => !item.summary?.lastActiveDate).length;
-    const hotList = users
-      .filter((item) => (item.pending_count || 0) > 0)
-      .sort((left, right) => (right.pending_count || 0) - (left.pending_count || 0))
-      .slice(0, 3);
-    const spotlight = hotList.length
-      ? hotList
-          .map(
-            (item) => `
-              <div class="mq-admin-hq-item">
-                <strong>${escapeHtml(item.user?.display_name || item.user?.username || "泡面侠")}</strong>
-                <span>${item.pending_count || 0} 份证明等你点头</span>
-              </div>
-            `,
-          )
-          .join("")
-      : `<div class="mq-admin-hq-item"><strong>全部清空啦</strong><span>目前没有新的学习证明在等你。</span></div>`;
-
-    hqEl.innerHTML = `
-      <div class="mq-admin-hq-hero">
-        <div>
-          <div class="mq-admin-hq-title">小和主控台</div>
-          <div class="mq-admin-hq-sub">这是只属于小和的观察界面。上面是全局节奏，下面再切到每位泡面侠的成长看板。</div>
-        </div>
-        <div class="mq-admin-hq-badge">小和专属</div>
-      </div>
-      <div class="mq-admin-hq-grid">
-        <div class="mq-admin-hq-card"><strong>${pendingTotal}</strong><span>待你点头的证明</span></div>
-        <div class="mq-admin-hq-card"><strong>${overAchievers}</strong><span>今天已经闪金的泡面侠</span></div>
-        <div class="mq-admin-hq-card"><strong>${quietUsers}</strong><span>还没发光的泡面侠</span></div>
-      </div>
-      <div class="mq-admin-hq-spotlight">
-        <div class="mq-admin-panel-title">优先看看这些泡面侠</div>
-        <div class="mq-admin-hq-list">${spotlight}</div>
-      </div>
+  function renderMetricCard(label, value, tone = "") {
+    return `
+      <article class="mq-mini-metric ${tone}">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(value)}</strong>
+      </article>
     `;
   }
 
-  function renderAdminSummary(users) {
-    const summaryEl = document.getElementById("mq-admin-summary");
-    if (!Array.isArray(users) || users.length === 0) {
-      summaryEl.innerHTML = "";
-      return;
-    }
-
-    const today = localDateKey();
-    const totalXp = users.reduce((sum, item) => sum + (item.summary?.totalXp || 0), 0);
-    const activeToday = users.filter((item) => item.summary?.lastActiveDate === today).length;
-    const recordedUsers = users.filter((item) => (item.summary?.daysRecorded || 0) > 0).length;
-    const averageXp = Math.round(totalXp / users.length);
-    summaryEl.innerHTML = `
-      <div class="mq-admin-card"><strong>${users.length}</strong><span>账号总数</span></div>
-      <div class="mq-admin-card"><strong>${activeToday}</strong><span>今日活跃</span></div>
-      <div class="mq-admin-card"><strong>${recordedUsers}</strong><span>留下脚印的泡面侠</span></div>
-      <div class="mq-admin-card"><strong>${averageXp}</strong><span>人均 XP</span></div>
-    `;
+  function statusCopy(day) {
+    const approved = approvedMinutes(day);
+    const pending = pendingMinutes(day);
+    if (approved > DAILY_GOAL_MINUTES) return "今天已经闪金啦，圆环正在冒光。";
+    if (approved >= DAILY_GOAL_MINUTES) return "今天的目标稳稳完成，小和看到会很高兴。";
+    if (pending > 0) return "证明已经送出去了，先等小和回信。";
+    if (day.checkin.stamped) return "章先盖上了，奖励会在审核通过后落下来。";
+    return "把三件小任务点亮，今天的印章就会自己砰地一声盖下来。";
   }
 
-  function renderAdminTabs() {
-    const tabsEl = document.getElementById("mq-admin-tabs");
-    if (!Array.isArray(adminUsers) || adminUsers.length === 0) {
-      tabsEl.innerHTML = `<div class="mq-admin-empty">还没有可以查看的泡面侠。</div>`;
-      return;
-    }
+  function renderHero() {
+    const { current, next, index } = getLevelInfo(app.state.totalXp);
+    const ratio = next ? Math.max(0, Math.min(1, (app.state.totalXp - current.xp) / (next.xp - current.xp))) : 1;
+    const today = ensureDay();
+    document.getElementById("hero-avatar").textContent = LEVEL_AVATARS[index] || LEVEL_AVATARS[LEVEL_AVATARS.length - 1];
+    document.getElementById("hero-level").textContent = `LV.${current.level}`;
+    document.getElementById("hero-name").textContent = app.user?.display_name || "泡面侠";
+    document.getElementById("hero-title").textContent = statusCopy(today);
+    document.getElementById("xp-total").textContent = `${app.state.totalXp} XP`;
+    document.getElementById("xp-next").textContent = next ? `距离 Lv.${next.level} 还差 ${Math.max(0, next.xp - app.state.totalXp)} XP` : "已经把这个世界刷到顶了";
+    document.getElementById("xp-fill").style.width = `${Math.round(ratio * 100)}%`;
+    const streak = document.getElementById("hero-streak");
+    streak.classList.toggle("mq-hidden", app.state.streak <= 1);
+    streak.textContent = `连签 ${app.state.streak} 天`;
+    document.getElementById("learner-role-pill").textContent = "泡面侠";
 
-    tabsEl.innerHTML = adminUsers
-      .map((item) => {
-        const user = item.user || {};
-        const summary = item.summary || {};
-        const pendingCount = item.pending_count || 0;
-        const isActive = user.id === adminSelectedUserId;
-        const activeLabel = summary.lastActiveDate === localDateKey() ? "今日有记录" : summary.lastActiveDate || "暂无记录";
+    document.getElementById("hero-metrics").innerHTML = [
+      renderMetricCard("今日已认可", formatMinutes(approvedMinutes(today)), approvedMinutes(today) >= DAILY_GOAL_MINUTES ? "green" : ""),
+      renderMetricCard("待审核", pendingMinutes(today) ? formatMinutes(pendingMinutes(today)) : "0 分钟", pendingMinutes(today) ? "gray" : ""),
+      renderMetricCard("今日经验", `+${today.xpEarned} XP`, approvedMinutes(today) ? "gold" : "gray"),
+      renderMetricCard("最近签到", app.state.lastDate ? formatDate(app.state.lastDate) : "还没盖章", today.checkin.rewardXp > 0 ? "green" : "gray"),
+    ].join("");
+  }
+
+  function ringTone(day) {
+    const state = day?.status?.progressState;
+    if (state === "over") return "gold";
+    if (state === "goal") return "green";
+    if (pendingMinutes(day) > 0 || day?.checkin?.stamped) return "gray";
+    return "";
+  }
+
+  function ringStroke(day) {
+    const approved = approvedMinutes(day);
+    if (!approved) return CIRCUMFERENCE;
+    const percent = Math.max(0, Math.min(1, approved / DAILY_GOAL_MINUTES));
+    return CIRCUMFERENCE * (1 - percent);
+  }
+
+  function progressBadge(day) {
+    if (day.status.progressState === "over") return `<span class="mq-state-badge gold">超额完成</span>`;
+    if (day.status.progressState === "goal") return `<span class="mq-state-badge green">今日达标</span>`;
+    if (pendingMinutes(day) > 0) return `<span class="mq-state-badge gray">等待审核</span>`;
+    if (day.checkin.stamped) return `<span class="mq-state-badge gray">已盖章，奖励待定</span>`;
+    return `<span class="mq-state-badge">还没开始结算</span>`;
+  }
+
+  function renderTaskButtons(day) {
+    return Object.entries(TASK_LABELS)
+      .map(([key, meta]) => {
+        const active = day.tasks[key];
         return `
-          <button type="button" class="mq-admin-user-tab ${isActive ? "active" : ""}" data-admin-user-id="${user.id}">
-            <span class="mq-admin-user-tab-top">
-              <span class="mq-admin-user-tab-name">${escapeHtml(user.display_name || user.username || "未命名泡面侠")}</span>
-              <span class="mq-admin-user-tab-level">Lv.${summary.level?.level || 1}</span>
+          <button type="button" class="mq-task-card ${active ? "done" : ""}" data-task="${key}">
+            <span class="mq-task-mark">${active ? "✓" : "○"}</span>
+            <span class="mq-task-copy">
+              <strong>${escapeHtml(meta.title)}</strong>
+              <small>${escapeHtml(meta.copy)}</small>
             </span>
-            <span class="mq-admin-user-tab-sub">@${escapeHtml(user.username || "")}</span>
-            <span class="mq-admin-user-tab-meta">XP ${summary.totalXp || 0} · ${escapeHtml(activeLabel)}${pendingCount ? ` · 待审 ${pendingCount}` : ""}</span>
           </button>
         `;
       })
       .join("");
   }
 
-  function renderAdminMeters(items) {
-    return items
+  function renderScoreButtons(field, value) {
+    return `
+      <div class="mq-score-row">
+        ${[1, 2, 3, 4, 5]
+          .map(
+            (score) => `
+              <button type="button" class="mq-score-btn ${score === value ? "active" : ""}" data-score-field="${field}" data-score-value="${score}">
+                ${score}
+              </button>
+            `,
+          )
+          .join("")}
+      </div>
+    `;
+  }
+
+  function submissionStatusLabel(status) {
+    if (status === "approved") return "小和赞许了你的工作！";
+    if (status === "rejected") return "小和想再看看";
+    return "小和查看中";
+  }
+
+  function submissionTone(status) {
+    if (status === "approved") return "green";
+    if (status === "rejected") return "red";
+    return "gray";
+  }
+
+  function renderProofList() {
+    if (!app.submissions.length) {
+      return `<div class="mq-empty-card">今天送出的证明还没有出现。先去学一点，再把它们送给小和。</div>`;
+    }
+    return app.submissions
+      .slice(0, 8)
+      .map((item) => {
+        const status = submissionStatusLabel(item.status);
+        const note = item.admin_note ? `<div class="mq-proof-note">小和留言：${escapeHtml(item.admin_note)}</div>` : "";
+        return `
+          <article class="mq-proof-card ${submissionTone(item.status)}">
+            <div class="mq-proof-top">
+              <div>
+                <strong>${formatMinutes(item.duration_minutes)}</strong>
+                <span>${escapeHtml(item.date_key)} · ${formatDateTime(item.created_at)}</span>
+              </div>
+              <span class="mq-proof-badge ${submissionTone(item.status)}">${escapeHtml(status)}</span>
+            </div>
+            ${item.note ? `<p>${escapeHtml(item.note)}</p>` : ""}
+            ${note}
+            <div class="mq-proof-actions">
+              <a href="${item.evidence_url}" target="_blank" rel="noreferrer">查看凭证</a>
+            </div>
+          </article>
+        `;
+      })
+      .join("");
+  }
+
+  function renderCalendarLegend() {
+    return STAMP_POOL.slice()
+      .sort((left, right) => right.rarity - left.rarity)
       .map(
         (item) => `
-          <div class="mq-admin-meter">
-            <div class="mq-admin-meter-top">
-              <span>${item.label}</span>
-              <strong>${item.value}</strong>
-            </div>
-            <div class="mq-admin-meter-track">
-              <div class="mq-admin-meter-fill ${item.tone || ""}" style="width:${item.percent}%"></div>
-            </div>
-          </div>
+          <span class="mq-legend-chip ${item.rarity === 9 ? "top" : ""}">
+            <span>${item.emoji}</span>
+            <small>${escapeHtml(item.label)}</small>
+          </span>
         `,
       )
       .join("");
   }
 
-  function renderAdminDashboard(detail) {
-    const dashboardEl = document.getElementById("mq-admin-dashboard");
-    if (!detail) {
-      dashboardEl.innerHTML = `<div class="mq-admin-empty">点开一位泡面侠，就能看到 TA 的成长看板。</div>`;
-      return;
-    }
-
-    const user = detail.user || {};
-    const summary = detail.summary || {};
-    const userState = normalizeState(detail.state || {});
-    const historyKeys = getSortedHistoryKeys(userState);
-    const today = localDateKey();
-    const snapshotKey = historyKeys.includes(today) ? today : historyKeys[0] || null;
-    const snapshotDay = snapshotKey ? normalizeDay(userState.history[snapshotKey]) : defaultDay();
-    const studyMinutes = sumStudyMinutes(snapshotDay);
-    const taskCount = countTasks(snapshotDay);
-    const journalCount = countJournal(snapshotDay);
-    const journal = snapshotDay.journal || {};
-    const segmentSummary = (snapshotDay.segments || []).length
-      ? snapshotDay.segments.map((segment) => `${fmt(segment.s)}→${fmt(segment.e)}`).join(" · ")
-      : "暂无学习分段";
-    const taskChips = [
-      ["订正错题", snapshotDay.tasks?.correction],
-      ["解决难点", snapshotDay.tasks?.difficulty],
-      ["复习知识点", snapshotDay.tasks?.review],
-    ]
-      .map(
-        ([label, done]) => `<span class="mq-admin-task-chip ${done ? "done" : ""}">${done ? "✓" : "○"} ${label}</span>`,
-      )
+  function renderCalendarGrid() {
+    const start = new Date(app.calendarCursor);
+    const month = start.getMonth();
+    const firstWeekday = (start.getDay() + 6) % 7;
+    const gridStart = new Date(start);
+    gridStart.setDate(start.getDate() - firstWeekday);
+    const dayLabels = ["一", "二", "三", "四", "五", "六", "日"]
+      .map((label) => `<div class="mq-calendar-weekday">${label}</div>`)
       .join("");
-    const recentDays = Array.isArray(summary.recentDays) ? summary.recentDays : [];
-    const submissions = Array.isArray(detail.submissions) ? detail.submissions : [];
-    const recentHtml = recentDays.length
-      ? recentDays
-          .map((day) => {
-            const pct = scorePercent(day.studyMinutes || 0, 180);
-            return `
-              <div class="mq-admin-activity-row">
-                <div class="mq-admin-activity-head">
-                  <strong>${escapeHtml(day.date)}</strong>
-                  <span>学习 ${day.studyMinutes || 0} 分钟 · XP +${day.xpEarned || 0}</span>
-                </div>
-                <div class="mq-admin-activity-bar">
-                  <div class="mq-admin-activity-fill" style="width:${pct}%"></div>
-                </div>
-                <div class="mq-admin-activity-foot">支线 ${day.taskCount || 0}/3 · 心情 ${day.mood || 0}/5${day.top ? ` · ${escapeHtml(day.top)}` : ""}</div>
-              </div>
-            `;
-          })
-          .join("")
-      : `<div class="mq-admin-empty">这位泡面侠还没留下学习足迹。</div>`;
-    const submissionHtml = submissions.length
-      ? submissions
-          .map(
-            (item) => `
-              <div class="mq-admin-review-card ${item.status}">
-                <div class="mq-admin-review-top">
-                  <div>
-                    <strong>${item.duration_minutes} 分钟</strong>
-                    <span>${escapeHtml(item.date_key)} · ${formatDateTime(item.created_at)}</span>
-                  </div>
-                  <span class="mq-submission-badge ${item.status}">${getSubmissionStatusLabel(item.status)}</span>
-                </div>
-                ${item.note ? `<div class="mq-admin-day-note">${escapeHtml(item.note)}</div>` : ""}
-                <div class="mq-admin-review-actions">
-                  <a class="mq-mini-link" href="${item.evidence_url}" target="_blank" rel="noreferrer">查看凭证</a>
-                  ${
-                    item.status === "pending"
-                      ? `
-                        <input id="mq-review-note-${item.id}" class="mq-admin-review-note" placeholder="给这位泡面侠留一句话（可选）" />
-                        <button type="button" class="mq-mini-btn" data-review-action="approve" data-submission-id="${item.id}">通过</button>
-                        <button type="button" class="mq-mini-btn" data-review-action="reject" data-submission-id="${item.id}">再补一点</button>
-                      `
-                      : item.admin_note
-                        ? `<span class="mq-submission-admin-note">小和留言：${escapeHtml(item.admin_note)}</span>`
-                        : ""
-                  }
-                </div>
-              </div>
-            `,
-          )
-          .join("")
-      : `<div class="mq-admin-empty">这位泡面侠暂时还没送来学习证明。</div>`;
-
-    dashboardEl.innerHTML = `
-      <div class="mq-admin-hero">
-        <div>
-          <div class="mq-admin-hero-title">${escapeHtml(user.display_name || user.username || "未命名泡面侠")}</div>
-          <div class="mq-admin-hero-sub">@${escapeHtml(user.username || "")} · ${user.is_admin ? "小和主控台" : "泡面侠档案"}</div>
-        </div>
-        <div class="mq-admin-hero-side">
-          <span class="mq-pill ${user.is_admin ? "admin" : ""}">Lv.${summary.level?.level || 1} ${escapeHtml(summary.level?.name || "新手学徒")}</span>
-          <span class="mq-pill">最近登录 ${formatDateTime(user.last_login_at)}</span>
-        </div>
-      </div>
-
-      <div class="mq-admin-kpi-grid">
-        <div class="mq-admin-kpi"><span>总 XP</span><strong>${summary.totalXp || 0}</strong></div>
-        <div class="mq-admin-kpi"><span>连击天数</span><strong>${summary.streak || 0}</strong></div>
-        <div class="mq-admin-kpi"><span>记录天数</span><strong>${summary.daysRecorded || 0}</strong></div>
-        <div class="mq-admin-kpi"><span>最后活跃</span><strong>${escapeHtml(summary.lastActiveDate || "—")}</strong></div>
-      </div>
-
-      <div class="mq-admin-dashboard-grid">
-        <div class="mq-admin-panel">
-          <div class="mq-admin-panel-title">状态快照 ${snapshotKey ? `· ${escapeHtml(snapshotKey)}` : ""}</div>
-          ${renderAdminMeters([
-            { label: "学习进度", value: `${studyMinutes} / 180 分钟`, percent: scorePercent(studyMinutes, 180), tone: "gold" },
-            { label: "支线完成", value: `${taskCount} / 3`, percent: scorePercent(taskCount, 3), tone: "teal" },
-            { label: "日志完整度", value: `${journalCount} / 3`, percent: scorePercent(journalCount, 3), tone: "purple" },
-            { label: "心情", value: `${snapshotDay.mood || 0} / 5`, percent: scorePercent(snapshotDay.mood || 0, 5), tone: "teal" },
-            { label: "精力", value: `${snapshotDay.energy || 0} / 5`, percent: scorePercent(snapshotDay.energy || 0, 5), tone: "gold" },
-            { label: "专注", value: `${journal.focus || 0} / 5`, percent: scorePercent(journal.focus || 0, 5), tone: "purple" },
-          ])}
-          <div class="mq-admin-task-row">${taskChips}</div>
-          <div class="mq-admin-segments">学习分段：${escapeHtml(segmentSummary)}</div>
-        </div>
-
-        <div class="mq-admin-panel">
-          <div class="mq-admin-panel-title">泡面侠观察</div>
-          <div class="mq-admin-note-block">
-            <span>印象最深</span>
-            <p>${escapeHtml(journal.top || "暂无记录")}</p>
+    const cells = [];
+    for (let index = 0; index < 42; index += 1) {
+      const current = new Date(gridStart);
+      current.setDate(gridStart.getDate() + index);
+      const key = localDateKey(current);
+      const day = normalizeDay(app.state.history[key]);
+      const isCurrentMonth = current.getMonth() === month;
+      const isToday = key === currentDayKey();
+      const stamped = day.checkin.stamped;
+      const tone = stamped
+        ? day.status.rewardState === "over"
+          ? "gold"
+          : day.status.rewardState === "earned"
+            ? "green"
+            : "gray"
+        : "";
+      const stampHtml = stamped
+        ? `
+          <div class="mq-stamp-wrap ${tone} ${app.latestStampDate === key ? "thunk" : ""}">
+            <div class="mq-stamp-ring ${tone}"></div>
+            <div class="mq-stamp-emoji">${day.checkin.emoji}</div>
           </div>
-          <div class="mq-admin-note-block">
-            <span>现在卡住的点</span>
-            <p>${escapeHtml(journal.stuck || "暂无记录")}</p>
-          </div>
-          <div class="mq-admin-note-block">
-            <span>主观感受</span>
-            <p>${escapeHtml(journal.feel || "暂无记录")}</p>
-          </div>
-          <div class="mq-admin-note-grid">
-            <div><span>难度感</span><strong>${journal.difficulty || 0}/5</strong></div>
-            <div><span>努力值</span><strong>${journal.effort || 0}/5</strong></div>
-          </div>
+        `
+        : `<div class="mq-stamp-wrap empty"></div>`;
+      cells.push(`
+        <article class="mq-calendar-cell ${isCurrentMonth ? "" : "muted"} ${isToday ? "today" : ""}" data-date-key="${key}">
+          <span class="mq-calendar-daynum">${current.getDate()}</span>
+          ${stampHtml}
+        </article>
+      `);
+    }
+    return `
+      <div class="mq-calendar-shell">
+        <div class="mq-calendar-head">
+          <button type="button" class="mq-ghost-btn" data-calendar-shift="-1">上个月</button>
+          <strong>${app.calendarCursor.toLocaleDateString("zh-CN", { year: "numeric", month: "long" })}</strong>
+          <button type="button" class="mq-ghost-btn" data-calendar-shift="1">下个月</button>
         </div>
-      </div>
-
-      <div class="mq-admin-panel">
-        <div class="mq-admin-panel-title">最近 7 次成长波形</div>
-        <div class="mq-admin-activity-list">${recentHtml}</div>
-      </div>
-
-      <div class="mq-admin-panel">
-        <div class="mq-admin-panel-title">学习证明观察列</div>
-        <div class="mq-admin-review-list">${submissionHtml}</div>
+        <div class="mq-calendar-grid">
+          ${dayLabels}
+          ${cells.join("")}
+        </div>
       </div>
     `;
   }
 
-  async function reviewSubmission(submissionId, action, admin_note) {
+  function renderDashboardView() {
+    const day = ensureDay();
+    const approved = approvedMinutes(day);
+    const pending = pendingMinutes(day);
+    const ringClass = ringTone(day);
+    return `
+      <div class="mq-dashboard-grid">
+        <section class="mq-panel-card mq-ring-card ${ringClass}">
+          <div class="mq-panel-head">
+            <div>
+              <p class="mq-panel-kicker">today ring</p>
+              <h2>今日圆环</h2>
+            </div>
+            ${progressBadge(day)}
+          </div>
+          <div class="mq-ring-layout">
+            <div class="mq-ring-widget ${ringClass}">
+              <svg viewBox="0 0 140 140" aria-hidden="true">
+                <circle class="mq-ring-track" cx="70" cy="70" r="52"></circle>
+                <circle class="mq-ring-fill ${ringClass}" cx="70" cy="70" r="52" style="stroke-dasharray:${CIRCUMFERENCE};stroke-dashoffset:${ringStroke(day)}"></circle>
+              </svg>
+              <div class="mq-ring-core">
+                <strong class="pixel">${approved ? formatMinutes(approved).replaceAll(" ", "") : "--"}</strong>
+                <span>${approved ? "已被认可" : pending ? "等待小和点头" : "还没开始结算"}</span>
+              </div>
+            </div>
+            <div class="mq-ring-side">
+              ${renderMetricCard("今日目标", `${DAILY_GOAL_MINUTES} 分钟`)}
+              ${renderMetricCard("待审核", pending ? formatMinutes(pending) : "0 分钟", pending ? "gray" : "")}
+              ${renderMetricCard("签到奖励", day.checkin.rewardXp ? `+${day.checkin.rewardXp} XP` : "暂未结算", day.checkin.rewardXp ? "gold" : "gray")}
+              ${renderMetricCard("今日总 XP", `+${day.xpEarned} XP`, approved ? "green" : "gray")}
+            </div>
+          </div>
+        </section>
+
+        <section class="mq-panel-card">
+          <div class="mq-panel-head">
+            <div>
+              <p class="mq-panel-kicker">send proof</p>
+              <h2>送出学习证明</h2>
+            </div>
+          </div>
+          <form id="proof-form" class="mq-proof-form">
+            <label>学习时长
+              <input name="duration_minutes" type="number" min="1" max="720" placeholder="例如 45" required>
+            </label>
+            <label>学习日期
+              <input name="date_key" type="date" value="${currentDayKey()}" required>
+            </label>
+            <label class="wide">补充说明
+              <textarea name="note" rows="3" placeholder="写一句今天具体学了什么，或者想让小和先看到什么。"></textarea>
+            </label>
+            <label class="wide">学习凭证
+              <input name="evidence" type="file" accept="image/*,.pdf" required>
+            </label>
+            <button type="submit" class="mq-primary-btn">送出学习证明</button>
+          </form>
+          <p class="mq-helper">在小和返回之前，不会点亮圆环、等级或经验条。但你的印章可以先盖上。</p>
+        </section>
+      </div>
+
+      <div class="mq-dashboard-grid lower">
+        <section class="mq-panel-card">
+          <div class="mq-panel-head">
+            <div>
+              <p class="mq-panel-kicker">daily checklist</p>
+              <h2>今天的小任务</h2>
+            </div>
+            <span class="mq-soft-note">${isAllTasksDone(day) ? "任务齐了，印章会自己跳下来" : "把三件事都点亮，就会自动签到"}</span>
+          </div>
+          <div class="mq-task-grid">${renderTaskButtons(day)}</div>
+          <div class="mq-journal-grid">
+            <label>今天最值得记住的瞬间
+              <textarea data-journal-field="top" rows="3" placeholder="例如：终于看懂了导数题的破题点">${escapeHtml(day.journal.top)}</textarea>
+            </label>
+            <label>今天最卡的地方
+              <textarea data-journal-field="stuck" rows="3" placeholder="例如：圆锥曲线条件一多就开始乱">${escapeHtml(day.journal.stuck)}</textarea>
+            </label>
+            <label>给今天一句总结
+              <textarea data-journal-field="feel" rows="3" placeholder="例如：虽然慢，但我真的在往前挪">${escapeHtml(day.journal.feel)}</textarea>
+            </label>
+          </div>
+          <div class="mq-score-grid">
+            <div><span>难度感</span>${renderScoreButtons("difficulty", day.journal.difficulty)}</div>
+            <div><span>专注度</span>${renderScoreButtons("focus", day.journal.focus)}</div>
+            <div><span>努力值</span>${renderScoreButtons("effort", day.journal.effort)}</div>
+            <div><span>心情</span>${renderScoreButtons("mood", day.mood)}</div>
+            <div><span>能量</span>${renderScoreButtons("energy", day.energy)}</div>
+          </div>
+        </section>
+
+        <section class="mq-panel-card">
+          <div class="mq-panel-head">
+            <div>
+              <p class="mq-panel-kicker">review status</p>
+              <h2>小和的回信</h2>
+            </div>
+          </div>
+          <div class="mq-proof-list">${renderProofList()}</div>
+        </section>
+      </div>
+
+      <section class="mq-panel-card">
+        <div class="mq-panel-head">
+          <div>
+            <p class="mq-panel-kicker">stamp calendar</p>
+            <h2>印章月历</h2>
+          </div>
+          <div class="mq-legend-row">${renderCalendarLegend()}</div>
+        </div>
+        ${renderCalendarGrid()}
+      </section>
+    `;
+  }
+
+  function renderJourneyView() {
+    const days = Object.entries(app.state.history)
+      .sort((left, right) => right[0].localeCompare(left[0]))
+      .filter(([, day]) => {
+        const normalized = normalizeDay(day);
+        return approvedMinutes(normalized) || pendingMinutes(normalized) || normalized.checkin.stamped || journalCount(normalized) || countDoneTasks(normalized);
+      });
+    const recent = days.length
+      ? days
+          .map(([dateKey, rawDay]) => {
+            const day = normalizeDay(rawDay);
+            const tone = ringTone(day);
+            return `
+              <article class="mq-journey-card ${tone}">
+                <div class="mq-journey-top">
+                  <strong>${escapeHtml(dateKey)}</strong>
+                  <span>+${day.xpEarned} XP</span>
+                </div>
+                <p>已认可 ${formatMinutes(approvedMinutes(day))} · 待审核 ${formatMinutes(pendingMinutes(day))}</p>
+                <p>任务 ${countDoneTasks(day)}/3 · 日志 ${journalCount(day)}/3</p>
+                <div class="mq-journey-footer">
+                  <span>${day.checkin.stamped ? `${day.checkin.emoji} ${escapeHtml(day.checkin.label || "今日印章")}` : "还没有盖章"}</span>
+                  <span>${day.status.rewardState === "over" ? "闪金完成" : day.status.rewardState === "earned" ? "达标完成" : day.status.rewardState === "pending" ? "奖励待定" : "静静等待"}</span>
+                </div>
+              </article>
+            `;
+          })
+          .join("")
+      : `<div class="mq-empty-card">这里会放下你每一天的小胜利。现在先去完成第一天吧。</div>`;
+
+    const duckDays = days.filter(([, day]) => normalizeDay(day).checkin.emoji === "🐥").length;
+    const overDays = days.filter(([, day]) => normalizeDay(day).status.progressState === "over").length;
+    const comboMax = days.reduce((max, [, day]) => Math.max(max, normalizeDay(day).checkin.comboDays || 0), 0);
+    return `
+      <div class="mq-dashboard-grid">
+        <section class="mq-panel-card">
+          <div class="mq-panel-head">
+            <div><p class="mq-panel-kicker">milestones</p><h2>成长里程碑</h2></div>
+          </div>
+          <div class="mq-achievement-grid">
+            ${renderMetricCard("小鸭子印章", `${duckDays} 次`, duckDays ? "gold" : "gray")}
+            ${renderMetricCard("闪金天数", `${overDays} 天`, overDays ? "gold" : "gray")}
+            ${renderMetricCard("最长同章连击", `${comboMax} 天`, comboMax > 1 ? "green" : "gray")}
+            ${renderMetricCard("总经验", `${app.state.totalXp} XP`, app.state.totalXp ? "green" : "gray")}
+          </div>
+        </section>
+
+        <section class="mq-panel-card">
+          <div class="mq-panel-head">
+            <div><p class="mq-panel-kicker">cute summary</p><h2>小和会看到的你</h2></div>
+          </div>
+          <div class="mq-story-list">
+            <div class="mq-story-line">最近一次盖章：${app.state.lastDate ? formatDate(app.state.lastDate) : "还没有"}</div>
+            <div class="mq-story-line">连续签到：${app.state.streak} 天</div>
+            <div class="mq-story-line">最近 7 天里，只要小和点头，经验条就会跟着冲刺。</div>
+          </div>
+        </section>
+      </div>
+
+      <section class="mq-panel-card">
+        <div class="mq-panel-head">
+          <div><p class="mq-panel-kicker">journey</p><h2>最近的成长足迹</h2></div>
+        </div>
+        <div class="mq-journey-list">${recent}</div>
+      </section>
+    `;
+  }
+
+  function renderSettingsView() {
+    return `
+      <section class="mq-panel-card">
+        <div class="mq-panel-head">
+          <div><p class="mq-panel-kicker">account</p><h2>账号设置</h2></div>
+        </div>
+        <form id="settings-form" class="mq-settings-form">
+          <label>显示名称<input name="display_name" value="${escapeHtml(app.user?.display_name || "")}" autocomplete="nickname"></label>
+          <label>当前密码<input name="current_password" type="password" autocomplete="current-password" placeholder="只有改密码时才需要填写"></label>
+          <label>新密码<input name="new_password" type="password" autocomplete="new-password" placeholder="留空则不修改"></label>
+          <button type="submit" class="mq-primary-btn">保存这份新模样</button>
+        </form>
+      </section>
+    `;
+  }
+
+  function renderLearner() {
+    renderHero();
+    document.querySelectorAll(".mq-nav button").forEach((button) => {
+      button.classList.toggle("active", button.dataset.view === app.learnerView);
+    });
+    const views = {
+      dashboard: renderDashboardView(),
+      calendar: `
+        <section class="mq-panel-card">
+          <div class="mq-panel-head">
+            <div><p class="mq-panel-kicker">month stamps</p><h2>整张印章月历</h2></div>
+            <div class="mq-legend-row">${renderCalendarLegend()}</div>
+          </div>
+          ${renderCalendarGrid()}
+        </section>
+      `,
+      journey: renderJourneyView(),
+      settings: renderSettingsView(),
+    };
+    Object.entries(views).forEach(([name, html]) => {
+      const element = document.getElementById(`learner-view-${name}`);
+      element.innerHTML = html;
+      element.classList.toggle("mq-hidden", name !== app.learnerView);
+    });
+
+    const proofForm = document.getElementById("proof-form");
+    if (proofForm) proofForm.addEventListener("submit", submitProof);
+    const settingsForm = document.getElementById("settings-form");
+    if (settingsForm) {
+      settingsForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const displayName = form.display_name.value.trim();
+        const currentPassword = form.current_password.value;
+        const newPassword = form.new_password.value;
+        try {
+          const data = await api("/api/me", {
+            method: "PUT",
+            body: { display_name: displayName, current_password: currentPassword, new_password: newPassword },
+          });
+          app.user = data.user;
+          renderLearner();
+          showToast("账号信息已经换成新的样子啦");
+        } catch (error) {
+          showToast(error.payload?.error || "保存失败", "error");
+        }
+      });
+    }
+
+    window.setTimeout(() => {
+      app.latestStampDate = null;
+    }, 500);
+    void maybeAutoCheckin();
+  }
+
+  function adminGroups() {
+    const users = app.adminUsers || [];
+    return {
+      pending: users.filter((item) => (item.pending_count || 0) > 0),
+      shining: users.filter((item) => item.recent_days?.[0]?.progressState === "over" || item.recent_days?.[0]?.rewardState === "over"),
+      all: users,
+    };
+  }
+
+  function renderAdminOverview() {
+    const users = app.adminUsers || [];
+    const pendingTotal = users.reduce((sum, item) => sum + (item.pending_count || 0), 0);
+    const overCount = users.filter((item) => item.recent_days?.[0]?.progressState === "over").length;
+    const activeToday = users.filter((item) => item.summary?.lastActiveDate === currentDayKey()).length;
+    document.getElementById("admin-overview").innerHTML = `
+      <section class="mq-admin-hero-card">
+        <div>
+          <p class="mq-panel-kicker">xiaohe dashboard</p>
+          <h2>小和今天先看哪里</h2>
+          <p>这里不是学习页，而是专门给小和盯进度、回证明、看谁在发光的后台。</p>
+        </div>
+        <div class="mq-admin-hero-stats">
+          ${renderMetricCard("待处理证明", `${pendingTotal} 份`, pendingTotal ? "gold" : "gray")}
+          ${renderMetricCard("今日闪金", `${overCount} 位`, overCount ? "gold" : "gray")}
+          ${renderMetricCard("今日有动静", `${activeToday} 位`, activeToday ? "green" : "gray")}
+          ${renderMetricCard("泡面侠总数", `${users.length} 位`, users.length ? "green" : "gray")}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderAdminQueue() {
+    const focusUsers = (app.adminUsers || []).filter((item) => (item.pending_count || 0) > 0);
+    document.getElementById("admin-queue").innerHTML = focusUsers.length
+      ? focusUsers
+          .slice(0, 8)
+          .map(
+            (item) => `
+              <button type="button" class="mq-queue-card ${item.user?.id === app.adminSelectedUserId ? "active" : ""}" data-admin-user-id="${item.user?.id}">
+                <strong>${escapeHtml(item.user?.display_name || item.user?.username || "泡面侠")}</strong>
+                <span>${item.pending_count} 份证明等小和点头</span>
+              </button>
+            `,
+          )
+          .join("")
+      : `<div class="mq-empty-card">现在桌上没有待看的证明，可以先去喝口水。</div>`;
+  }
+
+  function renderAdminUserTabs() {
+    const groups = adminGroups();
+    const tabs = [
+      { id: "pending", label: "待夸夸", count: groups.pending.length },
+      { id: "shining", label: "闪金中", count: groups.shining.length },
+      { id: "all", label: "全部泡面侠", count: groups.all.length },
+    ];
+    document.getElementById("admin-group-tabs").innerHTML = tabs
+      .map(
+        (item) => `
+          <button type="button" class="${app.adminGroup === item.id ? "active" : ""}" data-admin-group="${item.id}">
+            ${escapeHtml(item.label)} <small>${item.count}</small>
+          </button>
+        `,
+      )
+      .join("");
+
+    const users = groups[app.adminGroup] || [];
+    document.getElementById("admin-user-tabs").innerHTML = users.length
+      ? users
+          .map((item) => {
+            const summary = item.summary || {};
+            const hot = item.pending_count ? `待审 ${item.pending_count}` : summary.lastActiveDate || "安静一下";
+            return `
+              <button type="button" class="mq-admin-user-pill ${item.user?.id === app.adminSelectedUserId ? "active" : ""}" data-admin-user-id="${item.user?.id}">
+                <strong>${escapeHtml(item.user?.display_name || item.user?.username || "泡面侠")}</strong>
+                <span>Lv.${summary.level?.level || 1} · ${escapeHtml(hot)}</span>
+              </button>
+            `;
+          })
+          .join("")
+      : `<div class="mq-empty-card">这一栏现在没有泡面侠。</div>`;
+  }
+
+  function renderAdminFocus() {
+    const focusEl = document.getElementById("admin-focus");
+    if (!app.adminSelectedUserId) {
+      focusEl.innerHTML = `<div class="mq-empty-card">先从左边点开一位泡面侠吧。</div>`;
+      return;
+    }
+    const detail = app.adminDetailCache.get(app.adminSelectedUserId);
+    if (!detail) {
+      focusEl.innerHTML = `<div class="mq-empty-card">正在展开这位泡面侠的看板...</div>`;
+      return;
+    }
+    const summary = detail.summary || {};
+    const state = normalizeState(detail.state || {});
+    const historyKeys = Object.keys(state.history || {}).sort((left, right) => right.localeCompare(left));
+    const snapshotKey = historyKeys[0] || currentDayKey();
+    const day = normalizeDay(state.history[snapshotKey]);
+    const reviewCards = (detail.submissions || []).length
+      ? detail.submissions
+          .map((item) => {
+            const pending = item.status === "pending";
+            return `
+              <article class="mq-admin-review-card ${submissionTone(item.status)}">
+                <div class="mq-proof-top">
+                  <div>
+                    <strong>${formatMinutes(item.duration_minutes)}</strong>
+                    <span>${escapeHtml(item.date_key)} · ${formatDateTime(item.created_at)}</span>
+                  </div>
+                  <span class="mq-proof-badge ${submissionTone(item.status)}">${escapeHtml(submissionStatusLabel(item.status))}</span>
+                </div>
+                ${item.note ? `<p>${escapeHtml(item.note)}</p>` : ""}
+                <div class="mq-proof-actions"><a href="${item.evidence_url}" target="_blank" rel="noreferrer">查看凭证</a></div>
+                ${
+                  pending
+                    ? `
+                      <div class="mq-admin-review-actions">
+                        <input id="review-note-${item.id}" placeholder="给这位泡面侠留一句话（可选）">
+                        <button type="button" class="mq-ghost-btn" data-review-action="reject" data-submission-id="${item.id}">再补一点</button>
+                        <button type="button" class="mq-primary-btn" data-review-action="approve" data-submission-id="${item.id}">点头通过</button>
+                      </div>
+                    `
+                    : item.admin_note
+                      ? `<div class="mq-proof-note">小和留言：${escapeHtml(item.admin_note)}</div>`
+                      : ""
+                }
+              </article>
+            `;
+          })
+          .join("")
+      : `<div class="mq-empty-card">这位泡面侠暂时还没送来学习证明。</div>`;
+
+    const recentDays = (summary.recentDays || [])
+      .map(
+        (item) => `
+          <div class="mq-admin-activity-row">
+            <strong>${escapeHtml(item.date)}</strong>
+            <span>${formatMinutes(item.studyMinutes || 0)} · +${item.xpEarned || 0} XP</span>
+            <div class="mq-admin-activity-bar">
+              <div class="mq-admin-activity-fill ${item.progressState === "over" ? "gold" : item.progressState === "goal" ? "green" : ""}" style="width:${Math.min(100, Math.round(((item.studyMinutes || 0) / DAILY_GOAL_MINUTES) * 100))}%"></div>
+            </div>
+          </div>
+        `,
+      )
+      .join("");
+
+    focusEl.innerHTML = `
+      <section class="mq-admin-focus-card">
+        <div class="mq-admin-focus-head">
+          <div>
+            <p class="mq-panel-kicker">ramen hero detail</p>
+            <h2>${escapeHtml(detail.user?.display_name || detail.user?.username || "泡面侠")}</h2>
+            <p>@${escapeHtml(detail.user?.username || "")} · 最近登录 ${formatDateTime(detail.user?.last_login_at)}</p>
+          </div>
+          <div class="mq-admin-focus-badges">
+            <span class="mq-pill">Lv.${summary.level?.level || 1}</span>
+            <span class="mq-pill">${summary.totalXp || 0} XP</span>
+          </div>
+        </div>
+
+        <div class="mq-admin-focus-grid">
+          <section class="mq-panel-card">
+            <div class="mq-panel-head">
+              <div><p class="mq-panel-kicker">snapshot</p><h2>${escapeHtml(snapshotKey)}</h2></div>
+            </div>
+            <div class="mq-admin-snapshot-grid">
+              ${renderMetricCard("已认可时长", formatMinutes(approvedMinutes(day)), day.status.progressState === "goal" ? "green" : day.status.progressState === "over" ? "gold" : "gray")}
+              ${renderMetricCard("待审核时长", formatMinutes(pendingMinutes(day)), pendingMinutes(day) ? "gray" : "")}
+              ${renderMetricCard("今日经验", `+${day.xpEarned} XP`, approvedMinutes(day) ? "gold" : "gray")}
+              ${renderMetricCard("签到印章", day.checkin.stamped ? `${day.checkin.emoji} ${day.checkin.label || ""}` : "未盖章", day.checkin.rewardXp ? "green" : "gray")}
+            </div>
+            <div class="mq-task-grid compact">${renderTaskButtons(day)}</div>
+          </section>
+
+          <section class="mq-panel-card">
+            <div class="mq-panel-head">
+              <div><p class="mq-panel-kicker">notes</p><h2>这位泡面侠写了什么</h2></div>
+            </div>
+            <div class="mq-story-list">
+              <div class="mq-story-line">印象最深：${escapeHtml(day.journal.top || "还没有记录")}</div>
+              <div class="mq-story-line">卡点：${escapeHtml(day.journal.stuck || "还没有记录")}</div>
+              <div class="mq-story-line">感受：${escapeHtml(day.journal.feel || "还没有记录")}</div>
+              <div class="mq-story-line">难度 ${day.journal.difficulty}/5 · 专注 ${day.journal.focus}/5 · 努力 ${day.journal.effort}/5</div>
+            </div>
+          </section>
+        </div>
+
+        <section class="mq-panel-card">
+          <div class="mq-panel-head">
+            <div><p class="mq-panel-kicker">recent waves</p><h2>最近的成长波形</h2></div>
+          </div>
+          <div class="mq-admin-activity-list">${recentDays || `<div class="mq-empty-card">最近还没有成长波形。</div>`}</div>
+        </section>
+
+        <section class="mq-panel-card">
+          <div class="mq-panel-head">
+            <div><p class="mq-panel-kicker">proof review</p><h2>学习证明处理台</h2></div>
+          </div>
+          <div class="mq-admin-review-list">${reviewCards}</div>
+        </section>
+      </section>
+    `;
+  }
+
+  function renderAdmin() {
+    renderAdminOverview();
+    renderAdminQueue();
+    renderAdminUserTabs();
+    renderAdminFocus();
+  }
+
+  async function handleAdminReview(action, submissionId) {
+    const noteInput = document.getElementById(`review-note-${submissionId}`);
+    const adminNote = noteInput ? noteInput.value.trim() : "";
     try {
       await api(`/api/admin/submissions/${submissionId}/review`, {
         method: "POST",
-        body: { action, admin_note },
+        body: { action, admin_note: adminNote },
       });
-      await refreshAdminOverview(true);
+      await refreshAdminBundle(true);
       showToast(action === "approve" ? "小和赞许了你的工作！" : "已经请对方再补一点证明啦");
     } catch (error) {
-      setAdminStatus(`小和刚刚绊了一下 · ${escapeHtml(error.payload?.error || error.message)}`);
+      showToast(error.payload?.error || "处理失败", "error");
     }
   }
 
-  async function loadAdminUserDashboard(userId, preferCache = true) {
-    const dashboardEl = document.getElementById("mq-admin-dashboard");
-    if (preferCache && adminDetailCache.has(userId)) {
-      renderAdminDashboard(adminDetailCache.get(userId));
-    } else {
-      dashboardEl.innerHTML = `<div class="mq-admin-empty">正在展开这位泡面侠的成长看板...</div>`;
-    }
-
-    try {
-      const detail = await api(`/api/admin/users/${userId}`);
-      adminDetailCache.set(userId, detail);
-      if (adminSelectedUserId === userId) {
-        renderAdminDashboard(detail);
-      }
-    } catch (error) {
-      if (adminSelectedUserId === userId) {
-        dashboardEl.innerHTML = `<div class="mq-admin-empty">这份成长看板打开失败了：${escapeHtml(error.payload?.error || error.message)}</div>`;
-      }
+  function animateXpGain(amount) {
+    const track = document.querySelector(".mq-xp-track");
+    if (!track) return;
+    track.classList.add("boost");
+    window.setTimeout(() => track.classList.remove("boost"), 850);
+    const layer = document.getElementById("exp-layer");
+    const rect = track.getBoundingClientRect();
+    const count = Math.max(6, Math.min(24, Math.round(amount / 20)));
+    for (let index = 0; index < count; index += 1) {
+      const particle = document.createElement("span");
+      particle.className = "mq-exp-particle";
+      particle.textContent = index % 5 === 0 ? `+${amount}` : "EXP";
+      particle.style.left = `${rect.left + rect.width * (0.15 + Math.random() * 0.7)}px`;
+      particle.style.top = `${rect.top + rect.height / 2 + Math.random() * 12}px`;
+      particle.style.animationDelay = `${index * 18}ms`;
+      layer.appendChild(particle);
+      window.setTimeout(() => particle.remove(), 1400);
     }
   }
 
-  async function refreshAdminOverview(silent = false) {
-    if (!isAdmin()) return;
-    const summaryEl = document.getElementById("mq-admin-summary");
-    const tabsEl = document.getElementById("mq-admin-tabs");
-    const dashboardEl = document.getElementById("mq-admin-dashboard");
-    if (!silent && !adminUsers.length) {
-      summaryEl.innerHTML = `<div class="mq-admin-card"><strong>...</strong><span>加载中</span></div>`;
-      tabsEl.innerHTML = `<div class="mq-admin-empty">正在召集泡面侠名单...</div>`;
-      dashboardEl.innerHTML = `<div class="mq-admin-empty">成长看板准备中...</div>`;
-    }
-    setAdminStatus(silent ? "小和正在后台悄悄同步大家的进度..." : "小和正在整理这张观察台...");
-    try {
-      const data = await api("/api/admin/users");
-      adminUsers = (data.users || []).slice().sort((left, right) => (right.summary?.totalXp || 0) - (left.summary?.totalXp || 0));
-      renderAdminHQ(adminUsers);
-      renderAdminSummary(adminUsers);
-      if (!adminUsers.length) {
-        tabsEl.innerHTML = `<div class="mq-admin-empty">还没有泡面侠加入这里。</div>`;
-        dashboardEl.innerHTML = `<div class="mq-admin-empty">等第一位泡面侠出现，这里就会亮起来。</div>`;
-        setAdminStatus("现在还没有可以查看的泡面侠。");
+  function bindStaticEvents() {
+    document.querySelector(".mq-auth-tabs").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-auth-mode]");
+      if (!button) return;
+      setAuthMode(button.dataset.authMode);
+    });
+    document.getElementById("login-form").addEventListener("submit", handleLogin);
+    document.getElementById("register-form").addEventListener("submit", handleRegister);
+    document.getElementById("logout-btn").addEventListener("click", () => void handleLogout());
+    document.getElementById("admin-logout-btn").addEventListener("click", () => void handleLogout());
+    document.querySelector(".mq-nav").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-view]");
+      if (!button) return;
+      app.learnerView = button.dataset.view;
+      renderLearner();
+    });
+
+    const learnerRoot = document.getElementById("learner-app");
+    learnerRoot.addEventListener("click", (event) => {
+      const taskButton = event.target.closest("[data-task]");
+      if (taskButton) {
+        const day = ensureDay();
+        const key = taskButton.dataset.task;
+        day.tasks[key] = !day.tasks[key];
+        renderLearner();
+        scheduleSave();
+        void maybeAutoCheckin();
         return;
       }
 
-      const selectedStillExists = adminUsers.some((item) => item.user?.id === adminSelectedUserId);
-      if (!selectedStillExists) {
-        adminSelectedUserId = getDefaultAdminUser(adminUsers)?.user?.id || adminUsers[0].user?.id || null;
+      const scoreButton = event.target.closest("[data-score-field]");
+      if (scoreButton) {
+        const field = scoreButton.dataset.scoreField;
+        const value = clampInt(scoreButton.dataset.scoreValue, 1, 5, 0);
+        const day = ensureDay();
+        if (["difficulty", "focus", "effort"].includes(field)) {
+          day.journal[field] = value;
+        } else {
+          day[field] = value;
+        }
+        renderLearner();
+        scheduleSave();
+        return;
       }
-      renderAdminTabs();
-      await loadAdminUserDashboard(adminSelectedUserId, true);
-      setAdminStatus(`已刷新 · ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`);
-    } catch (error) {
-      tabsEl.innerHTML = `<div class="mq-admin-empty">读取失败：${escapeHtml(error.payload?.error || error.message)}</div>`;
-      dashboardEl.innerHTML = `<div class="mq-admin-empty">这张成长看板暂时还展开不了。</div>`;
-      setAdminStatus(`小和这次没刷新成功 · ${escapeHtml(error.payload?.error || error.message)}`);
-    }
+
+      const shiftButton = event.target.closest("[data-calendar-shift]");
+      if (shiftButton) {
+        const shift = clampInt(shiftButton.dataset.calendarShift, -12, 12, 0);
+        app.calendarCursor = new Date(app.calendarCursor.getFullYear(), app.calendarCursor.getMonth() + shift, 1);
+        renderLearner();
+      }
+    });
+
+    learnerRoot.addEventListener("input", (event) => {
+      const field = event.target.dataset.journalField;
+      if (!field) return;
+      const day = ensureDay();
+      day.journal[field] = event.target.value;
+      scheduleSave();
+    });
+
+    document.getElementById("admin-refresh-btn").addEventListener("click", () => void refreshAdminBundle(true));
+    document.getElementById("admin-group-tabs").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-admin-group]");
+      if (!button) return;
+      app.adminGroup = button.dataset.adminGroup;
+      renderAdmin();
+    });
+    document.getElementById("admin-queue").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-admin-user-id]");
+      if (!button) return;
+      app.adminSelectedUserId = clampInt(button.dataset.adminUserId, 0, 10000000, 0);
+      void loadAdminDetail(app.adminSelectedUserId, true);
+    });
+    document.getElementById("admin-user-tabs").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-admin-user-id]");
+      if (!button) return;
+      app.adminSelectedUserId = clampInt(button.dataset.adminUserId, 0, 10000000, 0);
+      void loadAdminDetail(app.adminSelectedUserId, true);
+    });
+    document.getElementById("admin-focus").addEventListener("click", (event) => {
+      const actionButton = event.target.closest("[data-review-action]");
+      if (!actionButton) return;
+      const action = actionButton.dataset.reviewAction;
+      const submissionId = clampInt(actionButton.dataset.submissionId, 0, 10000000, 0);
+      void handleAdminReview(action, submissionId);
+    });
   }
 
   async function boot() {
-    ensureShell();
+    bindStaticEvents();
     setAuthMode("login");
-    syncUserChrome();
-
+    showBoot("正在检查登录状态...");
     try {
-      showBoot("正在检查登录状态...");
       const data = await api("/api/me");
-      await finishSession(data.user);
+      app.user = data.user;
+      hideAuth();
+      await afterLogin();
     } catch (error) {
       if (error.status === 401) {
         showAuth("");
-        return;
+      } else {
+        showAuth("后端暂时没有连上，静态页面已经换成新客户端了。把服务跑起来后，这里会直接切到真实存档。");
       }
-      showAuth(error.payload?.error || "无法连接后端服务");
     }
   }
 

@@ -94,12 +94,12 @@ class MathQuestServerTest(unittest.TestCase):
         sample_state = {
             "history": {
                 "2026-04-09": {
-                    "segments": [{"s": 0, "e": 90}],
-                    "tasks": {"correction": True, "difficulty": True, "review": False},
+                    "segments": [{"s": 0, "e": 180}],
+                    "tasks": {"correction": True, "difficulty": True, "review": True},
                     "journal": {"top": "函数题", "stuck": "导数", "feel": "还行", "difficulty": 3, "focus": 4, "effort": 5},
                     "mood": 4,
                     "energy": 3,
-                    "xpEarned": 75,
+                    "xpEarned": 9999,
                     "rewardShown": False,
                 }
             },
@@ -109,12 +109,19 @@ class MathQuestServerTest(unittest.TestCase):
 
         status, data = client.request("PUT", "/api/state", {"state": sample_state})
         self.assertEqual(status, 200)
-        self.assertEqual(data["state"]["totalXp"], 75)
+        self.assertEqual(data["state"]["totalXp"], 0)
+        self.assertEqual(data["state"]["history"]["2026-04-09"]["status"]["approvedMinutes"], 0)
 
         status, data = client.request("GET", "/api/state")
         self.assertEqual(status, 200)
         self.assertEqual(data["state"]["history"]["2026-04-09"]["journal"]["top"], "函数题")
-        self.assertEqual(data["state"]["totalXp"], 75)
+        self.assertEqual(data["state"]["totalXp"], 0)
+
+        status, data = client.request("POST", "/api/checkin", {"date_key": "2026-04-09"})
+        self.assertEqual(status, 200)
+        self.assertTrue(data["checkin"]["stamped"])
+        self.assertEqual(data["state"]["history"]["2026-04-09"]["checkin"]["rewardXp"], 0)
+        self.assertEqual(data["state"]["history"]["2026-04-09"]["status"]["rewardState"], "muted")
 
         status, data = client.request(
             "PUT",
@@ -144,12 +151,12 @@ class MathQuestServerTest(unittest.TestCase):
                 "state": {
                     "history": {
                         "2026-04-08": {
-                            "segments": [{"s": 0, "e": 120}],
-                            "tasks": {"correction": True, "difficulty": False, "review": True},
+                            "segments": [{"s": 0, "e": 240}],
+                            "tasks": {"correction": True, "difficulty": True, "review": True},
                             "journal": {"top": "几何", "stuck": "", "feel": "", "difficulty": 2, "focus": 3, "effort": 4},
                             "mood": 5,
                             "energy": 4,
-                            "xpEarned": 60,
+                            "xpEarned": 6000,
                             "rewardShown": False,
                         }
                     },
@@ -172,17 +179,21 @@ class MathQuestServerTest(unittest.TestCase):
         status, data = admin.request("GET", "/api/admin/users")
         self.assertEqual(status, 200)
         users = {item["user"]["username"]: item for item in data["users"]}
-        self.assertIn("admin", users)
         self.assertIn("bob02", users)
-        self.assertEqual(users["bob02"]["summary"]["totalXp"], 60)
-        self.assertEqual(users["bob02"]["summary"]["lastActiveDate"], "2026-04-08")
+        self.assertEqual(users["bob02"]["summary"]["totalXp"], 0)
+        self.assertIsNone(users["bob02"]["summary"]["lastActiveDate"])
 
         bob_id = users["bob02"]["user"]["id"]
         status, data = admin.request("GET", f"/api/admin/users/{bob_id}")
         self.assertEqual(status, 200)
         self.assertEqual(data["user"]["username"], "bob02")
-        self.assertEqual(data["summary"]["totalXp"], 60)
+        self.assertEqual(data["summary"]["totalXp"], 0)
         self.assertEqual(data["state"]["history"]["2026-04-08"]["journal"]["top"], "几何")
+
+        status, data = user_client.request("POST", "/api/checkin", {"date_key": "2026-04-08"})
+        self.assertEqual(status, 200)
+        self.assertTrue(data["checkin"]["stamped"])
+        self.assertEqual(data["checkin"]["rewardXp"], 0)
 
         status, data = user_client.request(
             "POST",
@@ -216,6 +227,8 @@ class MathQuestServerTest(unittest.TestCase):
         approved_segments = data["state"]["history"]["2026-04-09"]["segments"]
         total_minutes = sum(item["e"] - item["s"] for item in approved_segments)
         self.assertEqual(total_minutes, 75)
+        self.assertGreater(data["state"]["totalXp"], 0)
+        self.assertEqual(data["state"]["history"]["2026-04-08"]["checkin"]["rewardXp"], 0)
 
 
 if __name__ == "__main__":

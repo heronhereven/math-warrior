@@ -3,11 +3,13 @@ import base64
 import binascii
 import hashlib
 import json
+import math
 import mimetypes
+import random
 import re
 import secrets
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,6 +24,7 @@ PASSWORD_MIN_LENGTH = 6
 MAX_BODY_BYTES = 2 * 1024 * 1024
 MAX_EVIDENCE_BYTES = 5 * 1024 * 1024
 PBKDF2_ROUNDS = 120_000
+DAILY_GOAL_MINUTES = 120
 LEVELS = [
     {"level": 1, "name": "新手学徒", "xp": 0},
     {"level": 2, "name": "初级探索者", "xp": 100},
@@ -32,6 +35,23 @@ LEVELS = [
     {"level": 7, "name": "微积分大师", "xp": 1400},
     {"level": 8, "name": "数学传奇", "xp": 1900},
 ]
+STAMP_POOL = [
+    {"emoji": "🐹", "rarity": 1, "weight": 20, "label": "仓鼠"},
+    {"emoji": "🐰", "rarity": 2, "weight": 18, "label": "兔兔"},
+    {"emoji": "🐱", "rarity": 3, "weight": 15, "label": "小猫"},
+    {"emoji": "🐶", "rarity": 4, "weight": 12, "label": "小狗"},
+    {"emoji": "🦊", "rarity": 5, "weight": 9, "label": "狐狸"},
+    {"emoji": "🐼", "rarity": 6, "weight": 7, "label": "熊猫"},
+    {"emoji": "🦁", "rarity": 7, "weight": 5, "label": "狮子"},
+    {"emoji": "🦄", "rarity": 8, "weight": 3, "label": "独角兽"},
+    {"emoji": "🐥", "rarity": 9, "weight": 1, "label": "小鸭子"},
+]
+TASK_XP = {"correction": 24, "difficulty": 22, "review": 18}
+JOURNAL_XP = 22
+GOAL_BONUS_XP = 46
+OVERACHIEVE_BONUS_XP = 36
+STAMP_REWARD_BASE = 14
+DATE_KEY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def utc_now() -> datetime:
@@ -55,7 +75,27 @@ def default_day() -> dict[str, Any]:
         "energy": 0,
         "xpEarned": 0,
         "rewardShown": False,
-        "checkin": {"stamped": False, "emoji": "", "rarity": 0, "stampedAt": None, "comboBonusXp": 0, "comboDays": 0},
+        "checkin": {
+            "stamped": False,
+            "emoji": "",
+            "rarity": 0,
+            "label": "",
+            "stampedAt": None,
+            "comboBonusXp": 0,
+            "comboDays": 0,
+            "rewardXp": 0,
+        },
+        "status": {
+            "goalMinutes": DAILY_GOAL_MINUTES,
+            "approvedMinutes": 0,
+            "pendingMinutes": 0,
+            "rejectedMinutes": 0,
+            "approvedCount": 0,
+            "pendingCount": 0,
+            "rejectedCount": 0,
+            "progressState": "locked",
+            "rewardState": "idle",
+        },
     }
 
 
@@ -65,6 +105,49 @@ def clamp_int(value: Any, minimum: int, maximum: int, fallback: int = 0) -> int:
     except (TypeError, ValueError):
         return fallback
     return max(minimum, min(maximum, parsed))
+
+
+def parse_date_key(value: str) -> date | None:
+    if not isinstance(value, str) or not DATE_KEY_RE.fullmatch(value):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def normalize_date_key(value: Any, *, default_to_today: bool = True) -> str:
+    if isinstance(value, str):
+        text = value.strip()
+    else:
+        text = ""
+    if not text and default_to_today:
+        text = datetime.now().strftime("%Y-%m-%d")
+    if not parse_date_key(text):
+        raise ValueError("日期格式必须是 YYYY-MM-DD")
+    return text
+
+
+def default_checkin() -> dict[str, Any]:
+    return default_day()["checkin"].copy()
+
+
+def normalize_checkin(raw: Any) -> dict[str, Any]:
+    base = default_checkin()
+    if not isinstance(raw, dict):
+        return base
+    base["stamped"] = bool(raw.get("stamped"))
+    emoji = raw.get("emoji", "")
+    base["emoji"] = emoji if isinstance(emoji, str) else ""
+    label = raw.get("label", "")
+    base["label"] = label if isinstance(label, str) else ""
+    base["rarity"] = clamp_int(raw.get("rarity"), 0, 10, 0)
+    stamped_at = raw.get("stampedAt")
+    base["stampedAt"] = stamped_at if isinstance(stamped_at, str) else None
+    base["comboBonusXp"] = clamp_int(raw.get("comboBonusXp"), 0, 200000, 0)
+    base["comboDays"] = clamp_int(raw.get("comboDays"), 0, 365, 0)
+    base["rewardXp"] = clamp_int(raw.get("rewardXp"), 0, 200000, 0)
+    return base
 
 
 def normalize_segment(raw: Any) -> dict[str, int] | None:
@@ -82,13 +165,6 @@ def normalize_day(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return base
 
-    segments = []
-    for item in raw.get("segments", []):
-        segment = normalize_segment(item)
-        if segment:
-            segments.append(segment)
-    base["segments"] = segments
-
     tasks_raw = raw.get("tasks", {})
     if isinstance(tasks_raw, dict):
         for key in base["tasks"]:
@@ -104,18 +180,8 @@ def normalize_day(raw: Any) -> dict[str, Any]:
 
     base["mood"] = clamp_int(raw.get("mood"), 0, 5, 0)
     base["energy"] = clamp_int(raw.get("energy"), 0, 5, 0)
-    base["xpEarned"] = clamp_int(raw.get("xpEarned"), 0, 100000, 0)
     base["rewardShown"] = bool(raw.get("rewardShown"))
-    checkin_raw = raw.get("checkin", {})
-    if isinstance(checkin_raw, dict):
-        base["checkin"] = {
-            "stamped": bool(checkin_raw.get("stamped")),
-            "emoji": checkin_raw.get("emoji", "") if isinstance(checkin_raw.get("emoji", ""), str) else "",
-            "rarity": clamp_int(checkin_raw.get("rarity"), 0, 10, 0),
-            "stampedAt": checkin_raw.get("stampedAt") if isinstance(checkin_raw.get("stampedAt"), str) else None,
-            "comboBonusXp": clamp_int(checkin_raw.get("comboBonusXp"), 0, 100000, 0),
-            "comboDays": clamp_int(checkin_raw.get("comboDays"), 0, 365, 0),
-        }
+    base["checkin"] = normalize_checkin(raw.get("checkin"))
     return base
 
 
@@ -129,8 +195,6 @@ def normalize_state(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return base
 
-    base["totalXp"] = clamp_int(raw.get("totalXp"), 0, 10_000_000, 0)
-    base["streak"] = clamp_int(raw.get("streak"), 0, 36500, 0)
     last_date = raw.get("lastDate")
     base["lastDate"] = last_date if isinstance(last_date, str) else None
 
@@ -142,7 +206,6 @@ def normalize_state(raw: Any) -> dict[str, Any]:
                 history[key] = normalize_day(value)
         base["history"] = history
 
-    base["totalXp"] = sum(day.get("xpEarned", 0) for day in base["history"].values())
     return base
 
 
@@ -152,6 +215,180 @@ def compute_level(total_xp: int) -> dict[str, Any]:
         if total_xp >= level["xp"]:
             current = level
     return current
+
+
+def compute_study_xp(minutes: int) -> int:
+    if minutes <= 0:
+        return 0
+    return int(round(14 * (math.exp(minutes / 95) - 1)))
+
+
+def build_submission_rollup(rows: list[sqlite3.Row]) -> dict[str, dict[str, int]]:
+    rollup: dict[str, dict[str, int]] = {}
+    for row in rows:
+        date_key = row["date_key"]
+        bucket = rollup.setdefault(
+            date_key,
+            {
+                "approved_minutes": 0,
+                "pending_minutes": 0,
+                "rejected_minutes": 0,
+                "approved_count": 0,
+                "pending_count": 0,
+                "rejected_count": 0,
+            },
+        )
+        status = row["status"]
+        minutes = clamp_int(row["minutes"], 0, 720, 0)
+        count = clamp_int(row["count"], 0, 10_000, 0)
+        if status == "approved":
+            bucket["approved_minutes"] += minutes
+            bucket["approved_count"] += count
+        elif status == "pending":
+            bucket["pending_minutes"] += minutes
+            bucket["pending_count"] += count
+        elif status == "rejected":
+            bucket["rejected_minutes"] += minutes
+            bucket["rejected_count"] += count
+    return rollup
+
+
+def checkin_combo_days(history: dict[str, Any], date_key: str) -> int:
+    day = history.get(date_key, {})
+    current = normalize_checkin(day.get("checkin"))
+    if not current["stamped"] or not current["emoji"]:
+        return 0
+    cursor = parse_date_key(date_key)
+    if not cursor:
+        return 1
+    combo = 1
+    prev_date = cursor - timedelta(days=1)
+    while True:
+        prev_key = prev_date.isoformat()
+        previous = normalize_checkin(history.get(prev_key, {}).get("checkin"))
+        if not previous["stamped"] or previous["emoji"] != current["emoji"]:
+            break
+        combo += 1
+        prev_date -= timedelta(days=1)
+    return combo
+
+
+def compute_stamp_reward(rarity: int, combo_days: int, approved_minutes: int) -> tuple[int, int]:
+    if rarity <= 0 or approved_minutes < DAILY_GOAL_MINUTES:
+        return 0, combo_days
+    base_reward = STAMP_REWARD_BASE * rarity
+    combo_bonus = 0
+    if combo_days > 1:
+        combo_bonus = base_reward * (2 ** (combo_days - 1))
+    if approved_minutes > DAILY_GOAL_MINUTES:
+        base_reward = int(round(base_reward * 1.4))
+        combo_bonus = int(round(combo_bonus * 1.25))
+    return base_reward + combo_bonus, combo_bonus
+
+
+def compute_progress_state(approved_minutes: int) -> str:
+    if approved_minutes <= 0:
+        return "locked"
+    if approved_minutes > DAILY_GOAL_MINUTES:
+        return "over"
+    if approved_minutes >= DAILY_GOAL_MINUTES:
+        return "goal"
+    return "growing"
+
+
+def compute_reward_state(day: dict[str, Any], approved_minutes: int, pending_minutes: int) -> str:
+    checkin = normalize_checkin(day.get("checkin"))
+    if not checkin["stamped"]:
+        return "idle"
+    if approved_minutes > DAILY_GOAL_MINUTES:
+        return "over"
+    if approved_minutes >= DAILY_GOAL_MINUTES:
+        return "earned"
+    if pending_minutes > 0:
+        return "pending"
+    return "muted"
+
+
+def finalize_state(state: dict[str, Any], submission_rollup: dict[str, dict[str, int]]) -> dict[str, Any]:
+    merged = normalize_state(state)
+    for date_key in submission_rollup:
+        if date_key not in merged["history"]:
+            merged["history"][date_key] = default_day()
+
+    sorted_keys = sorted(merged["history"], key=lambda item: parse_date_key(item) or date.min)
+    total_xp = 0
+    last_activity: str | None = None
+    stamped_dates: set[str] = set()
+
+    for date_key in sorted_keys:
+        day = normalize_day(merged["history"][date_key])
+        submission = submission_rollup.get(
+            date_key,
+            {
+                "approved_minutes": 0,
+                "pending_minutes": 0,
+                "rejected_minutes": 0,
+                "approved_count": 0,
+                "pending_count": 0,
+                "rejected_count": 0,
+            },
+        )
+        approved_minutes = clamp_int(submission["approved_minutes"], 0, 720, 0)
+        pending_minutes = clamp_int(submission["pending_minutes"], 0, 720, 0)
+        rejected_minutes = clamp_int(submission["rejected_minutes"], 0, 720, 0)
+        checkin = normalize_checkin(day.get("checkin"))
+        combo_days = checkin_combo_days(merged["history"], date_key) if checkin["stamped"] else 0
+        reward_xp, combo_bonus_xp = compute_stamp_reward(checkin["rarity"], combo_days, approved_minutes)
+        checkin["comboDays"] = combo_days
+        checkin["comboBonusXp"] = combo_bonus_xp
+        checkin["rewardXp"] = reward_xp
+        day["checkin"] = checkin
+        day["segments"] = collapse_minutes_to_segments(approved_minutes)
+        day["status"] = {
+            "goalMinutes": DAILY_GOAL_MINUTES,
+            "approvedMinutes": approved_minutes,
+            "pendingMinutes": pending_minutes,
+            "rejectedMinutes": rejected_minutes,
+            "approvedCount": clamp_int(submission["approved_count"], 0, 10_000, 0),
+            "pendingCount": clamp_int(submission["pending_count"], 0, 10_000, 0),
+            "rejectedCount": clamp_int(submission["rejected_count"], 0, 10_000, 0),
+            "progressState": compute_progress_state(approved_minutes),
+            "rewardState": compute_reward_state(day, approved_minutes, pending_minutes),
+        }
+
+        xp = 0
+        if approved_minutes > 0:
+            xp = compute_study_xp(approved_minutes)
+            for task_key, task_xp in TASK_XP.items():
+                if day["tasks"].get(task_key):
+                    xp += task_xp
+            if any((day["journal"].get(key, "").strip() for key in ("top", "stuck", "feel"))):
+                xp += JOURNAL_XP
+            if approved_minutes >= DAILY_GOAL_MINUTES and all(day["tasks"].values()):
+                xp += GOAL_BONUS_XP
+            if approved_minutes > DAILY_GOAL_MINUTES:
+                xp += OVERACHIEVE_BONUS_XP
+            xp += reward_xp
+        day["xpEarned"] = xp
+        merged["history"][date_key] = day
+        total_xp += xp
+        if approved_minutes > 0 or pending_minutes > 0 or checkin["stamped"]:
+            last_activity = date_key
+        if checkin["stamped"]:
+            stamped_dates.add(date_key)
+
+    streak = 0
+    if stamped_dates:
+        latest = max(stamped_dates, key=lambda item: parse_date_key(item) or date.min)
+        cursor = parse_date_key(latest)
+        while cursor and cursor.isoformat() in stamped_dates:
+            streak += 1
+            cursor -= timedelta(days=1)
+
+    merged["totalXp"] = total_xp
+    merged["streak"] = streak
+    merged["lastDate"] = last_activity
+    return merged
 
 
 def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -174,6 +411,8 @@ def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
                 "mood": clamp_int(day.get("mood"), 0, 5, 0),
                 "top": day.get("journal", {}).get("top", ""),
                 "stuck": day.get("journal", {}).get("stuck", ""),
+                "progressState": day.get("status", {}).get("progressState", "locked"),
+                "rewardState": day.get("status", {}).get("rewardState", "idle"),
             }
         )
         if len(recent_days) >= 7:
@@ -185,7 +424,7 @@ def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
         "streak": clamp_int(state.get("streak"), 0, 36500, 0),
         "level": compute_level(total_xp),
         "daysRecorded": len(history),
-        "lastActiveDate": sorted_days[0][0] if sorted_days else None,
+        "lastActiveDate": state.get("lastDate"),
         "totalMinutes": total_minutes,
         "recentDays": recent_days,
     }
@@ -293,7 +532,7 @@ class MathQuestApp:
                 INSERT INTO users (username, display_name, password_salt, password_hash, is_admin, created_at)
                 VALUES (?, ?, ?, ?, 1, ?)
                 """,
-                (self.admin_username, "管理员", salt_hex, password_hash, now),
+                (self.admin_username, "小和", salt_hex, password_hash, now),
             )
             user_id = cur.lastrowid
             conn.execute(
@@ -391,7 +630,7 @@ class MathQuestApp:
             raise ValueError("JSON 根对象必须是对象")
         return parsed
 
-    def _load_user_state(self, conn: sqlite3.Connection, user_id: int) -> dict[str, Any]:
+    def _load_raw_user_state(self, conn: sqlite3.Connection, user_id: int) -> dict[str, Any]:
         row = conn.execute("SELECT state_json FROM user_states WHERE user_id = ?", (user_id,)).fetchone()
         if row is None:
             state = default_state()
@@ -399,14 +638,13 @@ class MathQuestApp:
                 "INSERT INTO user_states (user_id, state_json, updated_at) VALUES (?, ?, ?)",
                 (user_id, json.dumps(state, ensure_ascii=False), utc_now_iso()),
             )
-            return self._merge_submission_minutes(conn, user_id, state)
+            return state
         try:
-            state = normalize_state(json.loads(row["state_json"]))
+            return normalize_state(json.loads(row["state_json"]))
         except json.JSONDecodeError:
-            state = default_state()
-        return self._merge_submission_minutes(conn, user_id, state)
+            return default_state()
 
-    def _save_user_state(self, conn: sqlite3.Connection, user_id: int, state: dict[str, Any]) -> dict[str, Any]:
+    def _save_raw_user_state(self, conn: sqlite3.Connection, user_id: int, state: dict[str, Any]) -> dict[str, Any]:
         normalized = normalize_state(state)
         now = utc_now_iso()
         payload = json.dumps(normalized, ensure_ascii=False)
@@ -418,31 +656,69 @@ class MathQuestApp:
             """,
             (user_id, payload, now),
         )
-        return self._merge_submission_minutes(conn, user_id, normalized)
+        return normalized
 
-    def _merge_submission_minutes(self, conn: sqlite3.Connection, user_id: int, state: dict[str, Any]) -> dict[str, Any]:
-        merged = normalize_state(state)
+    def _submission_rollup(self, conn: sqlite3.Connection, user_id: int) -> dict[str, dict[str, int]]:
         rows = conn.execute(
             """
-            SELECT date_key, COALESCE(SUM(duration_minutes), 0) AS approved_minutes
+            SELECT date_key, status, COALESCE(SUM(duration_minutes), 0) AS minutes, COUNT(*) AS count
             FROM study_submissions
-            WHERE user_id = ? AND status = 'approved'
-            GROUP BY date_key
+            WHERE user_id = ?
+            GROUP BY date_key, status
             """,
             (user_id,),
         ).fetchall()
-        approved_by_date = {row["date_key"]: clamp_int(row["approved_minutes"], 0, 720, 0) for row in rows}
+        return build_submission_rollup(rows)
 
-        for date_key in approved_by_date:
-            if date_key not in merged["history"]:
-                merged["history"][date_key] = default_day()
+    def _hydrate_user_state(self, conn: sqlite3.Connection, user_id: int, state: dict[str, Any]) -> dict[str, Any]:
+        return finalize_state(state, self._submission_rollup(conn, user_id))
 
-        for date_key, day in merged["history"].items():
-            if date_key in approved_by_date:
-                day["segments"] = collapse_minutes_to_segments(approved_by_date[date_key])
+    def _load_user_state(self, conn: sqlite3.Connection, user_id: int) -> dict[str, Any]:
+        return self._hydrate_user_state(conn, user_id, self._load_raw_user_state(conn, user_id))
 
-        merged["totalXp"] = sum(day.get("xpEarned", 0) for day in merged["history"].values())
+    def _merge_client_state(self, current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+        merged = normalize_state(current)
+        candidate = normalize_state(incoming)
+        for date_key, incoming_day in candidate["history"].items():
+            existing_day = normalize_day(merged["history"].get(date_key))
+            existing_day["tasks"] = incoming_day["tasks"]
+            existing_day["journal"] = incoming_day["journal"]
+            existing_day["mood"] = incoming_day["mood"]
+            existing_day["energy"] = incoming_day["energy"]
+            existing_day["rewardShown"] = incoming_day["rewardShown"]
+            merged["history"][date_key] = existing_day
         return merged
+
+    def _upsert_checkin(self, conn: sqlite3.Connection, user_id: int, date_key: str) -> dict[str, Any]:
+        raw_state = self._load_raw_user_state(conn, user_id)
+        history = raw_state.setdefault("history", {})
+        day = normalize_day(history.get(date_key))
+        if day["checkin"]["stamped"]:
+            self._save_raw_user_state(conn, user_id, raw_state)
+            return self._hydrate_user_state(conn, user_id, raw_state)
+
+        total_weight = sum(item["weight"] for item in STAMP_POOL)
+        roll = random.uniform(0, total_weight)
+        picked = STAMP_POOL[-1]
+        for item in STAMP_POOL:
+            roll -= item["weight"]
+            if roll <= 0:
+                picked = item
+                break
+
+        day["checkin"] = {
+            "stamped": True,
+            "emoji": picked["emoji"],
+            "rarity": picked["rarity"],
+            "label": picked["label"],
+            "stampedAt": utc_now_iso(),
+            "comboBonusXp": 0,
+            "comboDays": 1,
+            "rewardXp": 0,
+        }
+        history[date_key] = day
+        saved = self._save_raw_user_state(conn, user_id, raw_state)
+        return self._hydrate_user_state(conn, user_id, saved)
 
     def _decode_evidence_payload(self, body: dict[str, Any]) -> tuple[bytes, str, str]:
         evidence_data = body.get("evidence_data")
@@ -541,24 +817,11 @@ class MathQuestApp:
             raise ValueError("昵称最长 32 个字符")
         return username, password, display_name
 
-    def _serve_injected_index(self, handler: BaseHTTPRequestHandler) -> None:
+    def _serve_index(self, handler: BaseHTTPRequestHandler) -> None:
         if not self.index_path.exists():
             self._send_json(handler, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "找不到前端页面"})
             return
-
-        html = self.index_path.read_text(encoding="utf-8")
-        if 'href="/app-extra.css"' not in html:
-            html = html.replace("</head>", '\n<link rel="stylesheet" href="/app-extra.css">\n</head>', 1)
-        if 'src="/app-client.js"' not in html:
-            html = html.replace("</body>", '\n<script src="/app-client.js"></script>\n</body>', 1)
-
-        data = html.encode("utf-8")
-        handler.send_response(HTTPStatus.OK)
-        handler.send_header("Content-Type", "text/html; charset=utf-8")
-        handler.send_header("Cache-Control", "no-store")
-        handler.send_header("Content-Length", str(len(data)))
-        handler.end_headers()
-        handler.wfile.write(data)
+        self._serve_static_file(handler, "/index.html")
 
     def _serve_static_file(self, handler: BaseHTTPRequestHandler, relative_path: str) -> None:
         candidate = (self.static_dir / relative_path.lstrip("/")).resolve()
@@ -603,7 +866,7 @@ class MathQuestApp:
                 try:
                     path = urlparse(self.path).path
                     if path in {"/", "/index.html"}:
-                        app._serve_injected_index(self)
+                        app._serve_index(self)
                         return
                     if path in {"/app-client.js", "/app-extra.css"}:
                         app._serve_static_file(self, path)
@@ -694,7 +957,8 @@ class MathQuestApp:
                                 SELECT users.*, user_states.state_json
                                 FROM users
                                 LEFT JOIN user_states ON user_states.user_id = users.id
-                                ORDER BY users.is_admin DESC, users.created_at ASC
+                                WHERE users.is_admin = 0
+                                ORDER BY users.created_at ASC
                                 """
                             ).fetchall()
 
@@ -853,7 +1117,7 @@ class MathQuestApp:
                             app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
                             return
                         body = app._read_json(self)
-                        date_key = str(body.get("date_key", "")).strip() or datetime.now().strftime("%Y-%m-%d")
+                        date_key = normalize_date_key(body.get("date_key"))
                         duration_minutes = clamp_int(body.get("duration_minutes"), 1, 720, 0)
                         note = str(body.get("note", "")).strip()[:500]
                         if duration_minutes <= 0:
@@ -882,6 +1146,31 @@ class MathQuestApp:
                                 (cur.lastrowid,),
                             ).fetchone()
                         app._send_json(self, HTTPStatus.CREATED, {"submission": app._format_submission(row)})
+                        return
+
+                    if path == "/api/checkin":
+                        user = app._auth_user(self)
+                        if not user:
+                            app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
+                            return
+                        if user["is_admin"]:
+                            app._send_json(self, HTTPStatus.FORBIDDEN, {"error": "小和不会在这里签到"})
+                            return
+                        body = app._read_json(self)
+                        date_key = normalize_date_key(body.get("date_key"))
+                        with app._connect() as conn:
+                            state = app._upsert_checkin(conn, user["id"], date_key)
+                        day = state["history"].get(date_key, default_day())
+                        app._send_json(
+                            self,
+                            HTTPStatus.OK,
+                            {
+                                "message": "签到成功",
+                                "date_key": date_key,
+                                "checkin": day["checkin"],
+                                "state": state,
+                            },
+                        )
                         return
 
                     if path.startswith("/api/admin/submissions/") and path.endswith("/review"):
@@ -1001,7 +1290,10 @@ class MathQuestApp:
                             app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "缺少 state"})
                             return
                         with app._connect() as conn:
-                            state = app._save_user_state(conn, user["id"], body["state"])
+                            current = app._load_raw_user_state(conn, user["id"])
+                            merged = app._merge_client_state(current, body["state"])
+                            app._save_raw_user_state(conn, user["id"], merged)
+                            state = app._hydrate_user_state(conn, user["id"], merged)
                         app._send_json(self, HTTPStatus.OK, {"message": "保存成功", "state": state})
                         return
 
@@ -1037,7 +1329,7 @@ def main() -> None:
     )
     server = app.create_server()
     print(f"Math Quest server running on http://{args.host}:{args.port}")
-    print(f"默认管理员账号: {args.admin_user} / {args.admin_password}")
+    print(f"管理员账号已初始化: {args.admin_user}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

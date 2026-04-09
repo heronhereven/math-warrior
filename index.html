@@ -3,1395 +3,163 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Math Quest ⚔️</title>
-<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg: #0a0e1a;
-    --bg2: #111827;
-    --bg3: #1a2035;
-    --card: #141c2e;
-    --card2: #1e2a42;
-    --border: #2a3a5a;
-    --border2: #3d5080;
-    --gold: #f5c842;
-    --gold2: #ffd700;
-    --teal: #00d4aa;
-    --teal2: #00ffcc;
-    --purple: #a78bfa;
-    --purple2: #c4b5fd;
-    --red: #f87171;
-    --green: #4ade80;
-    --blue: #60a5fa;
-    --text: #e2e8f0;
-    --text2: #94a3b8;
-    --text3: #64748b;
-    --xp-bar: linear-gradient(90deg, #f5c842, #ff8c00);
-    --hp-bar: linear-gradient(90deg, #4ade80, #22d3ee);
-    --glow-gold: 0 0 12px rgba(245,200,66,0.4);
-    --glow-teal: 0 0 12px rgba(0,212,170,0.4);
-    --pixel: 'Press Start 2P', monospace;
-    --body: 'Noto Sans SC', sans-serif;
-  }
-
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--body);
-    min-height: 100vh;
-    background-image:
-      radial-gradient(ellipse at 20% 50%, rgba(167,139,250,0.04) 0%, transparent 60%),
-      radial-gradient(ellipse at 80% 20%, rgba(0,212,170,0.04) 0%, transparent 60%);
-  }
-
-  /* Stars */
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background-image:
-      radial-gradient(1px 1px at 10% 15%, rgba(255,255,255,0.4) 0%, transparent 100%),
-      radial-gradient(1px 1px at 30% 40%, rgba(255,255,255,0.2) 0%, transparent 100%),
-      radial-gradient(1px 1px at 60% 10%, rgba(255,255,255,0.3) 0%, transparent 100%),
-      radial-gradient(1px 1px at 80% 60%, rgba(255,255,255,0.2) 0%, transparent 100%),
-      radial-gradient(1px 1px at 45% 80%, rgba(255,255,255,0.3) 0%, transparent 100%),
-      radial-gradient(1px 1px at 90% 30%, rgba(255,255,255,0.25) 0%, transparent 100%),
-      radial-gradient(1px 1px at 5% 70%, rgba(255,255,255,0.15) 0%, transparent 100%),
-      radial-gradient(1px 1px at 70% 90%, rgba(255,255,255,0.2) 0%, transparent 100%);
-    pointer-events: none;
-    z-index: 0;
-  }
-
-  #app {
-    max-width: 560px;
-    margin: 0 auto;
-    padding: 0 0 80px;
-    position: relative;
-    z-index: 1;
-  }
-
-  /* ── HEADER ── */
-  .header {
-    padding: 20px 16px 0;
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 12px;
-  }
-  .logo {
-    font-family: var(--pixel);
-    font-size: 13px;
-    color: var(--gold);
-    text-shadow: var(--glow-gold);
-    line-height: 1.6;
-  }
-  .logo span { color: var(--teal); }
-  .streak-badge {
-    background: linear-gradient(135deg, #ff6b35, #f5c842);
-    border-radius: 99px;
-    padding: 6px 12px;
-    font-size: 12px;
-    font-weight: 700;
-    color: #000;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex-shrink: 0;
-    box-shadow: 0 0 16px rgba(245,107,35,0.4);
-  }
-
-  /* ── HERO CARD ── */
-  .hero-card {
-    margin: 16px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 16px;
-    position: relative;
-    overflow: hidden;
-  }
-  .hero-card::before {
-    content: '';
-    position: absolute;
-    top: -40px; right: -40px;
-    width: 120px; height: 120px;
-    background: radial-gradient(circle, rgba(245,200,66,0.08) 0%, transparent 70%);
-    pointer-events: none;
-  }
-  .hero-top {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    margin-bottom: 14px;
-  }
-  .avatar {
-    width: 56px;
-    height: 56px;
-    border-radius: 12px;
-    background: linear-gradient(135deg, var(--card2), var(--bg3));
-    border: 2px solid var(--gold);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    box-shadow: var(--glow-gold);
-    flex-shrink: 0;
-  }
-  .hero-info { flex: 1; min-width: 0; }
-  .hero-name {
-    font-family: var(--pixel);
-    font-size: 9px;
-    color: var(--gold);
-    margin-bottom: 4px;
-    letter-spacing: 1px;
-  }
-  .hero-class {
-    font-size: 12px;
-    color: var(--text2);
-    margin-bottom: 6px;
-  }
-  .level-badge {
-    display: inline-block;
-    background: linear-gradient(135deg, var(--gold), #ff8c00);
-    color: #000;
-    font-family: var(--pixel);
-    font-size: 7px;
-    padding: 3px 8px;
-    border-radius: 4px;
-  }
-
-  .xp-section { margin-bottom: 10px; }
-  .xp-label {
-    display: flex;
-    justify-content: space-between;
-    font-size: 11px;
-    color: var(--text3);
-    margin-bottom: 5px;
-    font-family: var(--pixel);
-  }
-  .xp-label span:last-child { color: var(--gold); }
-  .bar-track {
-    height: 12px;
-    background: var(--bg);
-    border-radius: 99px;
-    overflow: hidden;
-    border: 1px solid var(--border);
-    position: relative;
-  }
-  .bar-fill {
-    height: 100%;
-    border-radius: 99px;
-    transition: width 0.8s cubic-bezier(0.34,1.56,0.64,1);
-    position: relative;
-  }
-  .bar-fill.xp { background: var(--xp-bar); box-shadow: 0 0 8px rgba(245,200,66,0.5); }
-  .bar-fill.hp { background: var(--hp-bar); }
-  .bar-fill::after {
-    content: '';
-    position: absolute;
-    top: 2px; left: 8px; right: 8px; height: 3px;
-    background: rgba(255,255,255,0.2);
-    border-radius: 99px;
-  }
-
-  .quest-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: rgba(0,212,170,0.1);
-    border: 1px solid rgba(0,212,170,0.25);
-    border-radius: 8px;
-    padding: 6px 10px;
-    font-size: 12px;
-    color: var(--teal);
-  }
-  .quest-tag strong { color: var(--teal2); }
-
-  /* ── TABS ── */
-  .tabs {
-    display: flex;
-    gap: 6px;
-    padding: 0 16px;
-    margin-bottom: 12px;
-  }
-  .tab {
-    flex: 1;
-    padding: 9px 4px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    font-size: 11px;
-    color: var(--text2);
-    cursor: pointer;
-    transition: all 0.2s;
-    text-align: center;
-    font-family: var(--body);
-    font-weight: 500;
-  }
-  .tab:hover { border-color: var(--border2); color: var(--text); }
-  .tab.active {
-    background: linear-gradient(135deg, rgba(245,200,66,0.15), rgba(255,140,0,0.1));
-    border-color: var(--gold);
-    color: var(--gold);
-    font-weight: 700;
-    box-shadow: var(--glow-gold), inset 0 1px 0 rgba(245,200,66,0.1);
-  }
-
-  /* ── SECTION CARDS ── */
-  .section {
-    margin: 0 16px 12px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 14px;
-  }
-  .section-title {
-    font-family: var(--pixel);
-    font-size: 8px;
-    color: var(--purple);
-    letter-spacing: 1.5px;
-    margin-bottom: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .section-title::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: linear-gradient(90deg, var(--border), transparent);
-  }
-
-  /* ── STUDY TIME ── */
-  .study-summary {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
-  }
-  .study-total {
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--teal);
-    font-family: var(--pixel);
-    text-shadow: var(--glow-teal);
-  }
-  .study-goal { font-size: 11px; color: var(--text3); }
-
-  .timeline {
-    height: 36px;
-    background: var(--bg);
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    position: relative;
-    overflow: hidden;
-    margin-bottom: 10px;
-  }
-  .timeline-mark {
-    position: absolute;
-    top: 0; bottom: 0;
-    width: 1px;
-    background: var(--border2);
-    opacity: 0.5;
-  }
-  .timeline-label {
-    position: absolute;
-    bottom: 3px;
-    font-size: 9px;
-    color: var(--text3);
-    transform: translateX(-50%);
-    font-family: var(--pixel);
-  }
-  .timeline-seg {
-    position: absolute;
-    top: 6px; bottom: 6px;
-    border-radius: 4px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 8px;
-    color: rgba(0,0,0,0.7);
-    font-weight: 700;
-    overflow: hidden;
-    transition: all 0.4s cubic-bezier(0.34,1.56,0.64,1);
-    cursor: pointer;
-  }
-  .timeline-seg:hover { filter: brightness(1.2); }
-
-  .seg-colors { display: none; }
-  .seg-input-row {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-    margin-top: 8px;
-  }
-  .seg-input-row input {
-    flex: 1;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text);
-    font-family: var(--body);
-    font-size: 13px;
-    padding: 7px 10px;
-    outline: none;
-    transition: border-color 0.2s;
-  }
-  .seg-input-row input:focus { border-color: var(--teal); }
-  .seg-input-row input::placeholder { color: var(--text3); }
-  .seg-hint { font-size: 10px; color: var(--text3); margin-top: 4px; }
-  .seg-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
-    margin-top: 7px;
-  }
-  .seg-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    background: rgba(96,165,250,0.12);
-    border: 1px solid rgba(96,165,250,0.25);
-    border-radius: 99px;
-    padding: 3px 8px;
-    font-size: 11px;
-    color: var(--blue);
-  }
-  .seg-chip-del {
-    cursor: pointer;
-    color: var(--red);
-    font-size: 13px;
-    line-height: 1;
-  }
-
-  /* ── TASKS ── */
-  .task-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
-    border-radius: 10px;
-    background: var(--bg3);
-    border: 1px solid var(--border);
-    margin-bottom: 7px;
-    cursor: pointer;
-    transition: all 0.2s;
-    user-select: none;
-  }
-  .task-item:hover { border-color: var(--border2); transform: translateX(2px); }
-  .task-item.done {
-    background: rgba(74,222,128,0.06);
-    border-color: rgba(74,222,128,0.3);
-  }
-  .task-item.done .task-name { text-decoration: line-through; color: var(--text3); }
-  .checkbox {
-    width: 24px; height: 24px;
-    border-radius: 6px;
-    border: 2px solid var(--border2);
-    display: flex; align-items: center; justify-content: center;
-    transition: all 0.2s;
-    flex-shrink: 0;
-    font-size: 13px;
-  }
-  .task-item.done .checkbox {
-    background: var(--green);
-    border-color: var(--green);
-    box-shadow: 0 0 8px rgba(74,222,128,0.4);
-  }
-  .task-name { flex: 1; font-size: 13px; transition: all 0.2s; }
-  .task-xp { font-size: 11px; color: var(--gold); font-weight: 700; }
-
-  /* ── JOURNAL ── */
-  .journal-field { margin-bottom: 12px; }
-  .journal-label {
-    font-size: 11px;
-    color: var(--text3);
-    margin-bottom: 5px;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-  }
-  textarea, input[type=text] {
-    width: 100%;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text);
-    font-family: var(--body);
-    font-size: 13px;
-    padding: 9px 11px;
-    outline: none;
-    resize: vertical;
-    transition: border-color 0.2s;
-    line-height: 1.6;
-  }
-  textarea:focus, input[type=text]:focus { border-color: var(--purple); box-shadow: 0 0 0 2px rgba(167,139,250,0.15); }
-  textarea::placeholder { color: var(--text3); }
-
-  .stars-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
-  }
-  .stars-label { font-size: 12px; color: var(--text2); min-width: 48px; }
-  .star {
-    font-size: 20px;
-    cursor: pointer;
-    color: var(--border2);
-    transition: transform 0.15s, color 0.15s;
-    line-height: 1;
-  }
-  .star:hover, .star.lit { color: var(--gold); }
-  .star.lit { text-shadow: 0 0 6px rgba(245,200,66,0.6); }
-  .star:hover { transform: scale(1.3); }
-
-  /* ── STATUS ── */
-  .stat-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    margin-bottom: 12px;
-  }
-  .stat-card {
-    background: var(--bg3);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px;
-    text-align: center;
-  }
-  .stat-icon { font-size: 22px; margin-bottom: 4px; }
-  .stat-val {
-    font-family: var(--pixel);
-    font-size: 11px;
-    color: var(--gold);
-    margin-bottom: 2px;
-  }
-  .stat-lbl { font-size: 10px; color: var(--text3); }
-
-  .levels-list { display: flex; flex-direction: column; gap: 6px; }
-  .level-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: var(--bg3);
-    border: 1px solid var(--border);
-    transition: all 0.2s;
-  }
-  .level-row.current {
-    background: rgba(245,200,66,0.08);
-    border-color: rgba(245,200,66,0.35);
-    box-shadow: var(--glow-gold);
-  }
-  .level-row.unlocked { opacity: 0.7; }
-  .level-row.locked { opacity: 0.35; }
-  .level-row-icon { font-size: 18px; }
-  .level-row-info { flex: 1; }
-  .level-row-name { font-size: 12px; font-weight: 600; }
-  .level-row-req { font-size: 10px; color: var(--text3); margin-top: 1px; }
-  .level-row-badge {
-    font-size: 10px;
-    padding: 2px 7px;
-    border-radius: 4px;
-    font-weight: 700;
-  }
-  .badge-current { background: rgba(245,200,66,0.2); color: var(--gold); }
-  .badge-done { background: rgba(74,222,128,0.15); color: var(--green); }
-
-  /* ── HISTORY ── */
-  .history-day {
-    background: var(--bg3);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px 12px;
-    margin-bottom: 7px;
-    transition: all 0.2s;
-  }
-  .history-day:hover { border-color: var(--border2); }
-  .history-top {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 5px;
-  }
-  .history-date { font-size: 12px; font-weight: 600; }
-  .history-xp { font-size: 12px; color: var(--gold); font-weight: 700; }
-  .history-meta { font-size: 11px; color: var(--text2); }
-  .history-note { font-size: 11px; color: var(--text3); margin-top: 3px; font-style: italic; }
-
-  /* ── BUTTONS ── */
-  .btn {
-    padding: 8px 16px;
-    border-radius: 8px;
-    font-family: var(--body);
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-    border: none;
-    outline: none;
-  }
-  .btn:active { transform: scale(0.96); }
-  .btn-teal {
-    background: var(--teal);
-    color: #000;
-    box-shadow: 0 0 12px rgba(0,212,170,0.3);
-  }
-  .btn-teal:hover { background: var(--teal2); box-shadow: 0 0 20px rgba(0,212,170,0.5); }
-  .btn-ghost {
-    background: transparent;
-    border: 1px solid var(--border2);
-    color: var(--text2);
-  }
-  .btn-ghost:hover { border-color: var(--purple); color: var(--purple); }
-  .btn-gold {
-    background: linear-gradient(135deg, var(--gold), #ff8c00);
-    color: #000;
-    font-weight: 700;
-  }
-  .btn-gold:hover { box-shadow: var(--glow-gold); }
-  .btn-red {
-    background: transparent;
-    border: 1px solid rgba(248,113,113,0.3);
-    color: var(--red);
-    font-size: 11px;
-    padding: 4px 8px;
-  }
-
-  /* ── REWARD MODAL ── */
-  #reward-modal {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.75);
-    z-index: 100;
-    align-items: center;
-    justify-content: center;
-    backdrop-filter: blur(4px);
-  }
-  #reward-modal.show { display: flex; }
-  .modal-box {
-    background: var(--card);
-    border: 1px solid var(--gold);
-    border-radius: 20px;
-    padding: 28px 24px;
-    max-width: 320px;
-    width: 90%;
-    text-align: center;
-    box-shadow: var(--glow-gold), 0 20px 60px rgba(0,0,0,0.6);
-    animation: popIn 0.4s cubic-bezier(0.34,1.56,0.64,1);
-  }
-  @keyframes popIn {
-    from { transform: scale(0.7); opacity: 0; }
-    to { transform: scale(1); opacity: 1; }
-  }
-  .modal-icon { font-size: 52px; margin-bottom: 12px; }
-  .modal-title {
-    font-family: var(--pixel);
-    font-size: 10px;
-    color: var(--gold);
-    margin-bottom: 10px;
-    letter-spacing: 1px;
-  }
-  .modal-msg {
-    font-size: 15px;
-    color: var(--text2);
-    line-height: 1.7;
-    margin-bottom: 20px;
-  }
-
-  /* ── TOAST ── */
-  #toast {
-    position: fixed;
-    top: 20px;
-    left: 50%;
-    transform: translateX(-50%) translateY(-80px);
-    background: linear-gradient(135deg, #22d3ee, #a78bfa);
-    color: white;
-    padding: 10px 20px;
-    border-radius: 99px;
-    font-size: 13px;
-    font-weight: 700;
-    z-index: 99;
-    transition: transform 0.4s cubic-bezier(0.34,1.56,0.64,1);
-    white-space: nowrap;
-    box-shadow: 0 4px 20px rgba(34,211,238,0.35);
-  }
-  #toast.show { transform: translateX(-50%) translateY(0); }
-
-  /* ── XP POPUP ── */
-  .xp-popup {
-    position: fixed;
-    font-family: var(--pixel);
-    font-size: 10px;
-    color: var(--gold);
-    pointer-events: none;
-    z-index: 98;
-    animation: floatUp 1.5s ease-out forwards;
-    text-shadow: var(--glow-gold);
-  }
-  @keyframes floatUp {
-    0% { opacity: 1; transform: translateY(0); }
-    100% { opacity: 0; transform: translateY(-60px); }
-  }
-
-  /* ── REPORT ── */
-  .report-card {
-    background: var(--bg3);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px;
-    margin-bottom: 8px;
-  }
-  .report-title { font-size: 11px; color: var(--purple); font-weight: 600; margin-bottom: 8px; }
-  .report-row {
-    display: flex;
-    justify-content: space-between;
-    font-size: 12px;
-    padding: 4px 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .report-row:last-child { border: none; }
-  .report-row span:last-child { color: var(--teal); font-weight: 600; }
-
-  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
-
-  /* ── MOBILE BOTTOM NAV ── */
-  .bottom-nav {
-    position: fixed;
-    bottom: 0; left: 0; right: 0;
-    background: var(--bg2);
-    border-top: 1px solid var(--border);
-    display: flex;
-    z-index: 50;
-    max-width: 560px;
-    margin: 0 auto;
-  }
-  .bottom-nav-item {
-    flex: 1;
-    padding: 10px 4px 8px;
-    text-align: center;
-    cursor: pointer;
-    transition: all 0.2s;
-    border: none;
-    background: none;
-    font-family: var(--body);
-  }
-  .bottom-nav-item .nav-icon { font-size: 18px; margin-bottom: 2px; }
-  .bottom-nav-item .nav-label { font-size: 9px; color: var(--text3); }
-  .bottom-nav-item.active .nav-icon { filter: drop-shadow(0 0 6px var(--gold)); }
-  .bottom-nav-item.active .nav-label { color: var(--gold); font-weight: 700; }
-
-  .divider { height: 1px; background: var(--border); margin: 10px 0; }
-
-  /* animate in */
-  @keyframes fadeSlide {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  .pane { animation: fadeSlide 0.2s ease; }
-
-  .empty-state {
-    text-align: center;
-    padding: 24px;
-    color: var(--text3);
-    font-size: 13px;
-  }
-  .empty-state .big { font-size: 36px; margin-bottom: 8px; }
-
-  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
-</style>
+<title>Math Quest | 泡面侠训练站</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=Press+Start+2P&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./app-extra.css">
 </head>
 <body>
-<div id="app">
+  <div class="mq-bg-orb mq-bg-orb-a" aria-hidden="true"></div>
+  <div class="mq-bg-orb mq-bg-orb-b" aria-hidden="true"></div>
+  <div class="mq-stars" aria-hidden="true"></div>
 
-  <!-- HEADER -->
-  <div class="header">
-    <div class="logo">MATH<br><span>QUEST</span> ⚔️</div>
-    <div id="streak-badge" class="streak-badge" style="display:none">🔥 <span id="streak-num">0</span> 天连击</div>
-  </div>
-
-  <!-- HERO CARD -->
-  <div class="hero-card">
-    <div class="hero-top">
-      <div class="avatar" id="hero-avatar">🧙</div>
-      <div class="hero-info">
-        <div class="hero-name">MATH WARRIOR</div>
-        <div class="hero-class" id="hero-class">新手学徒</div>
-        <div class="level-badge">LV.<span id="hero-level">1</span></div>
-      </div>
-      <div style="text-align:right; flex-shrink:0">
-        <div style="font-size:10px;color:var(--text3);margin-bottom:3px">今日 XP</div>
-        <div style="font-family:var(--pixel);font-size:12px;color:var(--gold)" id="today-xp-disp">0</div>
+  <div id="app" class="mq-app-shell">
+    <div id="boot-screen" class="mq-overlay">
+      <div class="mq-boot-card">
+        <p class="mq-kicker pixel">math quest</p>
+        <h1>泡面侠训练站</h1>
+        <p id="boot-text">正在连接小和的工作台...</p>
       </div>
     </div>
 
-    <div class="xp-section">
-      <div class="xp-label">
-        <span>EXP</span>
-        <span><span id="xp-current">0</span> / <span id="xp-next">100</span></span>
-      </div>
-      <div class="bar-track"><div class="bar-fill xp" id="xp-bar" style="width:0%"></div></div>
-    </div>
-
-    <div class="quest-tag">
-      🎯 主线任务：期末数学考试目标 <strong>A / A+</strong>
-    </div>
-  </div>
-
-  <!-- TABS -->
-  <div class="tabs">
-    <button class="tab active" onclick="switchTab('today')">⚔️ 今日</button>
-    <button class="tab" onclick="switchTab('journal')">📓 日志</button>
-    <button class="tab" onclick="switchTab('status')">🏆 状态</button>
-    <button class="tab" onclick="switchTab('history')">📅 历史</button>
-    <button class="tab" onclick="switchTab('report')">📊 复盘</button>
-  </div>
-
-  <!-- ═══ TODAY PANE ═══ -->
-  <div id="pane-today" class="pane">
-    <!-- Study Time -->
-    <div class="section">
-      <div class="section-title">⏱ 学习时间</div>
-      <div class="study-summary">
-        <div>
-          <div class="study-total" id="study-total-disp">0h 0m</div>
-          <div class="study-goal">目标 3小时 (180分钟)</div>
+    <section id="auth-screen" class="mq-auth-screen mq-hidden">
+      <div class="mq-auth-card">
+        <div class="mq-auth-copy">
+          <p class="mq-kicker pixel">math quest</p>
+          <h1>泡面侠的学习冒险</h1>
+          <p>把今天的努力存进账号里。证明会先送到小和那里，等她点头之后，圆环、等级和奖励才会一起亮起来。</p>
         </div>
-        <div style="text-align:right">
-          <div style="font-size:11px;color:var(--text3);margin-bottom:4px">完成度</div>
-          <div style="font-family:var(--pixel);font-size:10px;color:var(--teal)" id="study-pct">0%</div>
+
+        <div class="mq-auth-panel">
+          <div class="mq-auth-tabs">
+            <button type="button" class="active" data-auth-mode="login">登录</button>
+            <button type="button" data-auth-mode="register">注册</button>
+          </div>
+
+          <div id="auth-error" class="mq-inline-note error"></div>
+
+          <form id="login-form" class="mq-auth-form">
+            <label>用户名<input id="login-username" autocomplete="username" required></label>
+            <label>密码<input id="login-password" type="password" autocomplete="current-password" required></label>
+            <button type="submit" class="mq-primary-btn">进入训练站</button>
+          </form>
+
+          <form id="register-form" class="mq-auth-form mq-hidden">
+            <label>用户名<input id="register-username" autocomplete="username" required></label>
+            <label>昵称<input id="register-display-name" autocomplete="nickname" required></label>
+            <label>密码<input id="register-password" type="password" autocomplete="new-password" required></label>
+            <button type="submit" class="mq-primary-btn">成为泡面侠</button>
+          </form>
         </div>
       </div>
+    </section>
 
-      <div class="bar-track" style="margin-bottom:10px;height:8px">
-        <div class="bar-fill hp" id="study-bar" style="width:0%"></div>
-      </div>
-
-      <div class="timeline" id="timeline">
-        <div class="timeline-mark" style="left:33.33%"></div>
-        <div class="timeline-mark" style="left:66.66%"></div>
-        <div class="timeline-label" style="left:0%;transform:none;padding-left:3px">0</div>
-        <div class="timeline-label" style="left:33.33%">1h</div>
-        <div class="timeline-label" style="left:66.66%">2h</div>
-        <div class="timeline-label" style="right:0;transform:none;padding-right:3px">3h</div>
-      </div>
-
-      <div class="seg-input-row">
-        <input type="number" id="seg-start" placeholder="开始(分钟)" min="0" max="180" style="max-width:130px">
-        <span style="color:var(--text3);font-size:14px">→</span>
-        <input type="number" id="seg-end" placeholder="结束(分钟)" min="0" max="180" style="max-width:130px">
-        <button class="btn btn-teal" onclick="addSegment()">+ 添加</button>
-      </div>
-      <div class="seg-hint">例：打算学 13:00~14:30，填 0 → 90 ；分段填写即可叠加</div>
-      <div class="seg-chips" id="seg-chips"></div>
-    </div>
-
-    <!-- Side Tasks -->
-    <div class="section">
-      <div class="section-title">🎯 支线任务</div>
-      <div class="task-item" id="task-correction" onclick="toggleTask('correction')">
-        <div class="checkbox" id="cb-correction"></div>
-        <span class="task-name">📝 订正错题</span>
-        <span class="task-xp">+25 XP</span>
-      </div>
-      <div class="task-item" id="task-difficulty" onclick="toggleTask('difficulty')">
-        <div class="checkbox" id="cb-difficulty"></div>
-        <span class="task-name">💥 解决今日难点</span>
-        <span class="task-xp">+20 XP</span>
-      </div>
-      <div class="task-item" id="task-review" onclick="toggleTask('review')">
-        <div class="checkbox" id="cb-review"></div>
-        <span class="task-name">🔁 复习知识点</span>
-        <span class="task-xp">+15 XP</span>
-      </div>
-
-      <div style="margin-top:10px;padding:8px 10px;background:var(--bg3);border-radius:8px;border:1px solid var(--border);font-size:12px;color:var(--text2)">
-        全部完成（含3h学习+日志）可额外获得 <span style="color:var(--gold);font-weight:700">+50 XP 大奖励</span> 🎉
-      </div>
-    </div>
-  </div>
-
-  <!-- ═══ JOURNAL PANE ═══ -->
-  <div id="pane-journal" class="pane" style="display:none">
-    <div class="section">
-      <div class="section-title">📓 内心日志</div>
-
-      <div class="journal-field">
-        <div class="journal-label">💡 今天印象最深的一题</div>
-        <textarea id="j-top" rows="2" placeholder="写下那道让你豁然开朗或反复卡住的题…" oninput="saveJournal()"></textarea>
-      </div>
-      <div class="journal-field">
-        <div class="journal-label">🧱 今日卡点</div>
-        <textarea id="j-stuck" rows="2" placeholder="哪个概念或题型还没搞懂？" oninput="saveJournal()"></textarea>
-      </div>
-      <div class="journal-field">
-        <div class="journal-label">🌈 今天感受</div>
-        <textarea id="j-feel" rows="2" placeholder="学得顺不顺？有什么想说的…" oninput="saveJournal()"></textarea>
-      </div>
-
-      <div class="divider"></div>
-      <div style="font-size:11px;color:var(--purple);font-weight:600;margin-bottom:10px;letter-spacing:1px">🔍 自我观察</div>
-
-      <div id="star-difficulty" class="stars-row" data-key="difficulty">
-        <span class="stars-label">难度感</span>
-        <span class="star" data-v="1" onclick="setStar('difficulty',1)">★</span>
-        <span class="star" data-v="2" onclick="setStar('difficulty',2)">★</span>
-        <span class="star" data-v="3" onclick="setStar('difficulty',3)">★</span>
-        <span class="star" data-v="4" onclick="setStar('difficulty',4)">★</span>
-        <span class="star" data-v="5" onclick="setStar('difficulty',5)">★</span>
-      </div>
-      <div id="star-focus" class="stars-row" data-key="focus">
-        <span class="stars-label">专注度</span>
-        <span class="star" data-v="1" onclick="setStar('focus',1)">★</span>
-        <span class="star" data-v="2" onclick="setStar('focus',2)">★</span>
-        <span class="star" data-v="3" onclick="setStar('focus',3)">★</span>
-        <span class="star" data-v="4" onclick="setStar('focus',4)">★</span>
-        <span class="star" data-v="5" onclick="setStar('focus',5)">★</span>
-      </div>
-      <div id="star-effort" class="stars-row" data-key="effort">
-        <span class="stars-label">努力值</span>
-        <span class="star" data-v="1" onclick="setStar('effort',1)">★</span>
-        <span class="star" data-v="2" onclick="setStar('effort',2)">★</span>
-        <span class="star" data-v="3" onclick="setStar('effort',3)">★</span>
-        <span class="star" data-v="4" onclick="setStar('effort',4)">★</span>
-        <span class="star" data-v="5" onclick="setStar('effort',5)">★</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- ═══ STATUS PANE ═══ -->
-  <div id="pane-status" class="pane" style="display:none">
-    <div class="section">
-      <div class="section-title">📊 角色状态</div>
-      <div class="stat-grid">
-        <div class="stat-card">
-          <div class="stat-icon">⭐</div>
-          <div class="stat-val" id="s-totalxp">0</div>
-          <div class="stat-lbl">总 XP</div>
+    <section id="learner-app" class="mq-screen mq-hidden">
+      <header class="mq-topbar">
+        <div class="mq-brand">
+          <p class="mq-kicker pixel">math quest</p>
+          <h1>泡面侠训练站</h1>
         </div>
-        <div class="stat-card">
-          <div class="stat-icon">🏅</div>
-          <div class="stat-val" id="s-level">1</div>
-          <div class="stat-lbl">当前等级</div>
+        <div class="mq-topbar-actions">
+          <span id="learner-role-pill" class="mq-pill">泡面侠</span>
+          <button type="button" class="mq-ghost-btn" id="logout-btn">退出</button>
         </div>
-        <div class="stat-card">
-          <div class="stat-icon">🔥</div>
-          <div class="stat-val" id="s-streak">0</div>
-          <div class="stat-lbl">连击天数</div>
+      </header>
+
+      <main class="mq-learner-main">
+        <section class="mq-hero-card">
+          <div class="mq-hero-head">
+            <div class="mq-avatar-stage">
+              <div id="hero-avatar" class="mq-avatar">🍜</div>
+              <div class="mq-avatar-badge pixel" id="hero-level">LV.1</div>
+            </div>
+            <div class="mq-hero-copy">
+              <div class="mq-hero-name-row">
+                <h2 id="hero-name">泡面侠</h2>
+                <span id="hero-streak" class="mq-streak-pill mq-hidden">连签 0 天</span>
+              </div>
+              <p id="hero-title" class="mq-hero-title">今天也去把数学怪打得晕头转向。</p>
+              <div class="mq-xp-card">
+                <div class="mq-xp-head">
+                  <span class="pixel" id="xp-total">0 XP</span>
+                  <span id="xp-next">距离下一阶 100 XP</span>
+                </div>
+                <div class="mq-xp-track">
+                  <div id="xp-fill" class="mq-xp-fill"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mq-hero-metrics" id="hero-metrics"></div>
+        </section>
+
+        <nav class="mq-nav">
+          <button type="button" class="active" data-view="dashboard">今日冒险</button>
+          <button type="button" data-view="calendar">印章月历</button>
+          <button type="button" data-view="journey">成长足迹</button>
+          <button type="button" data-view="settings">账号设置</button>
+        </nav>
+
+        <section id="learner-view-dashboard" class="mq-view"></section>
+        <section id="learner-view-calendar" class="mq-view mq-hidden"></section>
+        <section id="learner-view-journey" class="mq-view mq-hidden"></section>
+        <section id="learner-view-settings" class="mq-view mq-hidden"></section>
+      </main>
+    </section>
+
+    <section id="admin-app" class="mq-screen mq-hidden">
+      <header class="mq-admin-topbar">
+        <div class="mq-brand">
+          <p class="mq-kicker pixel">math quest control</p>
+          <h1>小和工作台</h1>
         </div>
-        <div class="stat-card">
-          <div class="stat-icon">✨</div>
-          <div class="stat-val" id="s-todayxp">0</div>
-          <div class="stat-lbl">今日 XP</div>
+        <div class="mq-topbar-actions">
+          <span class="mq-pill admin">小和专属</span>
+          <button type="button" class="mq-ghost-btn" id="admin-logout-btn">退出</button>
         </div>
-      </div>
+      </header>
 
-      <div style="font-size:11px;color:var(--purple);font-weight:600;margin-bottom:10px;letter-spacing:1px">😊 今日心态</div>
-      <div id="star-mood" class="stars-row" data-key="mood">
-        <span class="stars-label">心情</span>
-        <span class="star" data-v="1" onclick="setStar('mood',1)">★</span>
-        <span class="star" data-v="2" onclick="setStar('mood',2)">★</span>
-        <span class="star" data-v="3" onclick="setStar('mood',3)">★</span>
-        <span class="star" data-v="4" onclick="setStar('mood',4)">★</span>
-        <span class="star" data-v="5" onclick="setStar('mood',5)">★</span>
-      </div>
-      <div id="star-energy" class="stars-row" data-key="energy">
-        <span class="stars-label">精力</span>
-        <span class="star" data-v="1" onclick="setStar('energy',1)">★</span>
-        <span class="star" data-v="2" onclick="setStar('energy',2)">★</span>
-        <span class="star" data-v="3" onclick="setStar('energy',3)">★</span>
-        <span class="star" data-v="4" onclick="setStar('energy',4)">★</span>
-        <span class="star" data-v="5" onclick="setStar('energy',5)">★</span>
-      </div>
-    </div>
+      <main class="mq-admin-main">
+        <section id="admin-overview" class="mq-admin-overview"></section>
 
-    <div class="section">
-      <div class="section-title">🏆 等级树</div>
-      <div class="levels-list" id="levels-list"></div>
-    </div>
+        <div class="mq-admin-grid">
+          <aside class="mq-admin-sidebar">
+            <section class="mq-admin-panel">
+              <div class="mq-panel-head">
+                <div>
+                  <p class="mq-panel-kicker">proof queue</p>
+                  <h2>待你点头</h2>
+                </div>
+                <button type="button" class="mq-ghost-btn" id="admin-refresh-btn">刷新</button>
+              </div>
+              <div id="admin-queue"></div>
+            </section>
+
+            <section class="mq-admin-panel">
+              <div class="mq-panel-head">
+                <div>
+                  <p class="mq-panel-kicker">ramen heroes</p>
+                  <h2>泡面侠分类</h2>
+                </div>
+              </div>
+              <div id="admin-group-tabs" class="mq-filter-tabs"></div>
+              <div id="admin-user-tabs" class="mq-admin-user-tabs"></div>
+            </section>
+          </aside>
+
+          <section class="mq-admin-stage">
+            <div id="admin-focus"></div>
+          </section>
+        </div>
+      </main>
+    </section>
   </div>
 
-  <!-- ═══ HISTORY PANE ═══ -->
-  <div id="pane-history" class="pane" style="display:none">
-    <div class="section">
-      <div class="section-title">📅 历史记录</div>
-      <div id="history-list">
-        <div class="empty-state"><div class="big">🌱</div>暂无记录，快开始第一天吧！</div>
-      </div>
-    </div>
-  </div>
+  <div id="toast" class="mq-toast"></div>
+  <div id="exp-layer" class="mq-exp-layer" aria-hidden="true"></div>
 
-  <!-- ═══ REPORT PANE ═══ -->
-  <div id="pane-report" class="pane" style="display:none">
-    <div class="section">
-      <div class="section-title">📊 每日复盘</div>
-      <div id="daily-report"></div>
-    </div>
-    <div class="section">
-      <div class="section-title">📈 每周复盘</div>
-      <div id="weekly-report"></div>
-    </div>
-    <div class="section" style="margin-top:4px">
-      <div class="btn-row">
-        <button class="btn btn-gold" onclick="downloadReport()">⬇ 下载复盘报告</button>
-        <button class="btn btn-ghost" onclick="copyReport()">📋 复制文本</button>
-      </div>
-    </div>
-  </div>
-
-</div><!-- end #app -->
-
-<!-- REWARD MODAL -->
-<div id="reward-modal">
-  <div class="modal-box">
-    <div class="modal-icon" id="modal-icon">🎁</div>
-    <div class="modal-title">✦ 随机奖励触发 ✦</div>
-    <div class="modal-msg" id="modal-msg"></div>
-    <button class="btn btn-gold" onclick="closeModal()">收下奖励！</button>
-  </div>
-</div>
-
-<!-- TOAST -->
-<div id="toast"></div>
-
-<script>
-// ══════════════════════════════════════════
-//  DATA
-// ══════════════════════════════════════════
-const LEVELS = [
-  { level:1, name:'新手学徒',   icon:'🌱', xp:0   },
-  { level:2, name:'初级探索者', icon:'⚔️', xp:100  },
-  { level:3, name:'数学战士',   icon:'🛡️', xp:250  },
-  { level:4, name:'方程猎人',   icon:'🏹', xp:450  },
-  { level:5, name:'积分法师',   icon:'🔮', xp:700  },
-  { level:6, name:'极限骑士',   icon:'⚡', xp:1000 },
-  { level:7, name:'微积分大师', icon:'🌟', xp:1400 },
-  { level:8, name:'数学传奇',   icon:'👑', xp:1900 },
-];
-const AVATARS = ['🌱','⚔️','🛡️','🏹','🔮','⚡','🌟','👑'];
-const SEG_COLORS = ['#00d4aa','#60a5fa','#a78bfa','#f5c842','#f87171','#4ade80'];
-const REWARDS = [
-  { icon:'🎉', msg:'今天的努力是明天成绩的基石！每一分钟的专注都会在考场上找到你。' },
-  { icon:'✨', msg:'你的专注力超过了今天99%的自己！这种状态继续保持。' },
-  { icon:'🔥', msg:'连续学习的火焰正在燃烧！难题只是还没掌握的知识点。' },
-  { icon:'💎', msg:'每一道难题都是升级的材料！卡点就是突破口。' },
-  { icon:'🌙', msg:'深夜的灯光，是最闪亮的星。你的坚持，她都看见了。' },
-  { icon:'🚀', msg:'向着A+冲刺，你正在起飞！方法+时间+重复 = 成功公式。' },
-  { icon:'🍀', msg:'今天的卡点是明天的通关秘籍！把它写下来，你就拥有了它。' },
-  { icon:'💪', msg:'难题不可怕，可怕的是放弃思考。你没有，这就是差距。' },
-];
-const XP_VAL = { studyHour:30, correction:25, difficulty:20, review:15, journal:20, allDone:50 };
-
-function todayKey() {
-  return new Date().toISOString().slice(0,10);
-}
-function fmt(mins) {
-  const h = Math.floor(mins/60), m = mins%60;
-  return h===0 ? `${m}m` : m===0 ? `${h}h` : `${h}h ${m}m`;
-}
-function load() {
-  try { const r = localStorage.getItem('mq3'); if(r) return JSON.parse(r); } catch{}
-  return { totalXp:0, streak:0, lastDate:null, history:{} };
-}
-function save(s) { localStorage.setItem('mq3', JSON.stringify(s)); }
-
-let state = load();
-
-function getDay() {
-  const k = todayKey();
-  if (!state.history[k]) {
-    state.history[k] = {
-      segments:[], tasks:{correction:false,difficulty:false,review:false},
-      journal:{top:'',stuck:'',feel:'',difficulty:0,focus:0,effort:0},
-      mood:0, energy:0, xpEarned:0, rewardShown:false
-    };
-  }
-  return state.history[k];
-}
-
-function calcDayXp(d) {
-  const mins = d.segments.reduce((s,seg)=>s+(seg.e-seg.s),0);
-  const studyH = Math.floor(mins/60);
-  let xp = studyH * XP_VAL.studyHour;
-  if (d.tasks.correction) xp += XP_VAL.correction;
-  if (d.tasks.difficulty) xp += XP_VAL.difficulty;
-  if (d.tasks.review) xp += XP_VAL.review;
-  const jFilled = [d.journal.top, d.journal.stuck, d.journal.feel].filter(s=>s.trim()).length;
-  if (jFilled >= 1) xp += XP_VAL.journal;
-  const allDone = mins>=180 && d.tasks.correction && d.tasks.difficulty && d.tasks.review && jFilled>=1;
-  if (allDone) xp += XP_VAL.allDone;
-  return { xp, allDone, studyMins:mins };
-}
-
-function recalcTotal() {
-  state.totalXp = Object.values(state.history).reduce((s,d)=>s+(d.xpEarned||0),0);
-}
-
-function getLevelInfo(xp) {
-  let cur = LEVELS[0];
-  for (const l of LEVELS) { if (xp >= l.xp) cur = l; }
-  const idx = LEVELS.indexOf(cur);
-  const next = LEVELS[idx+1] || null;
-  return { cur, next, idx };
-}
-
-// ══════════════════════════════════════════
-//  RENDER
-// ══════════════════════════════════════════
-function renderAll() {
-  const d = getDay();
-  const { xp, allDone, studyMins } = calcDayXp(d);
-  d.xpEarned = xp;
-  recalcTotal();
-
-  // Streak
-  const yest = new Date(); yest.setDate(yest.getDate()-1);
-  const yKey = yest.toISOString().slice(0,10);
-  if (state.lastDate !== todayKey()) {
-    if (state.lastDate === yKey) { state.streak = (state.streak||0)+1; }
-    else if (state.lastDate && state.lastDate !== todayKey()) { state.streak = 1; }
-    else if (!state.lastDate) { state.streak = 1; }
-    state.lastDate = todayKey();
-  }
-  save(state);
-
-  // Hero
-  const { cur, next, idx } = getLevelInfo(state.totalXp);
-  document.getElementById('hero-avatar').textContent = AVATARS[idx];
-  document.getElementById('hero-class').textContent = cur.name;
-  document.getElementById('hero-level').textContent = cur.level;
-  document.getElementById('today-xp-disp').textContent = '+'+xp;
-  document.getElementById('xp-current').textContent = state.totalXp;
-  document.getElementById('xp-next').textContent = next ? next.xp : '∞';
-
-  const xpFrom = cur.xp;
-  const xpTo = next ? next.xp : cur.xp + 500;
-  const pct = Math.min(100, ((state.totalXp - xpFrom) / (xpTo - xpFrom)) * 100);
-  document.getElementById('xp-bar').style.width = pct.toFixed(1)+'%';
-
-  // Streak badge
-  const sb = document.getElementById('streak-badge');
-  if (state.streak > 1) { sb.style.display='flex'; document.getElementById('streak-num').textContent=state.streak; }
-  else sb.style.display='none';
-
-  // Study
-  const spct = Math.min(100,(studyMins/180)*100);
-  document.getElementById('study-total-disp').textContent = fmt(studyMins);
-  document.getElementById('study-pct').textContent = Math.round(spct)+'%';
-  document.getElementById('study-bar').style.width = spct+'%';
-  renderTimeline(d.segments);
-  renderChips(d.segments);
-
-  // Tasks
-  ['correction','difficulty','review'].forEach(k=>{
-    const done = d.tasks[k];
-    document.getElementById('task-'+k).classList.toggle('done', done);
-    document.getElementById('cb-'+k).textContent = done ? '✓' : '';
-  });
-
-  // Journal
-  document.getElementById('j-top').value = d.journal.top;
-  document.getElementById('j-stuck').value = d.journal.stuck;
-  document.getElementById('j-feel').value = d.journal.feel;
-  renderStars('difficulty', d.journal.difficulty);
-  renderStars('focus', d.journal.focus);
-  renderStars('effort', d.journal.effort);
-  renderStars('mood', d.mood);
-  renderStars('energy', d.energy);
-
-  // Status
-  document.getElementById('s-totalxp').textContent = state.totalXp;
-  document.getElementById('s-level').textContent = cur.level;
-  document.getElementById('s-streak').textContent = state.streak || 0;
-  document.getElementById('s-todayxp').textContent = '+'+xp;
-  renderLevelsList(idx);
-
-  renderHistory();
-  renderReport();
-}
-
-function renderTimeline(segs) {
-  const tl = document.getElementById('timeline');
-  // remove old segs
-  tl.querySelectorAll('.timeline-seg').forEach(e=>e.remove());
-  segs.forEach((seg, i) => {
-    const left = (seg.s/180)*100;
-    const width = ((seg.e-seg.s)/180)*100;
-    const el = document.createElement('div');
-    el.className = 'timeline-seg';
-    el.style.left = left+'%';
-    el.style.width = width+'%';
-    el.style.background = SEG_COLORS[i % SEG_COLORS.length];
-    el.title = fmt(seg.s)+' → '+fmt(seg.e);
-    if (width > 10) el.textContent = fmt(seg.e-seg.s);
-    el.onclick = () => removeSegment(i);
-    tl.appendChild(el);
-  });
-}
-
-function renderChips(segs) {
-  const c = document.getElementById('seg-chips');
-  c.innerHTML = '';
-  segs.forEach((seg,i) => {
-    const chip = document.createElement('span');
-    chip.className = 'seg-chip';
-    chip.innerHTML = `${fmt(seg.s)}→${fmt(seg.e)} <span class="seg-chip-del" onclick="removeSegment(${i})">×</span>`;
-    c.appendChild(chip);
-  });
-}
-
-function renderStars(key, val) {
-  const container = document.getElementById('star-'+key);
-  if (!container) return;
-  container.querySelectorAll('.star').forEach(s => {
-    s.classList.toggle('lit', parseInt(s.dataset.v) <= val);
-  });
-}
-
-function renderLevelsList(curIdx) {
-  const el = document.getElementById('levels-list');
-  el.innerHTML = '';
-  LEVELS.forEach((l, i) => {
-    const row = document.createElement('div');
-    row.className = 'level-row ' + (i === curIdx ? 'current' : i < curIdx ? 'unlocked' : 'locked');
-    let badge = '';
-    if (i === curIdx) badge = '<span class="level-row-badge badge-current">当前</span>';
-    else if (i < curIdx) badge = '<span class="level-row-badge badge-done">✓</span>';
-    row.innerHTML = `
-      <span class="level-row-icon">${l.icon}</span>
-      <div class="level-row-info">
-        <div class="level-row-name">Lv.${l.level} ${l.name}</div>
-        <div class="level-row-req">${l.xp} XP 解锁</div>
-      </div>
-      ${badge}
-    `;
-    el.appendChild(row);
-  });
-}
-
-function renderHistory() {
-  const el = document.getElementById('history-list');
-  const days = Object.entries(state.history)
-    .sort((a,b)=>b[0].localeCompare(a[0]))
-    .slice(0,21);
-  if (!days.length) {
-    el.innerHTML = '<div class="empty-state"><div class="big">🌱</div>暂无记录，快开始第一天吧！</div>';
-    return;
-  }
-  el.innerHTML = '';
-  days.forEach(([date, d]) => {
-    const mins = d.segments.reduce((s,seg)=>s+(seg.e-seg.s),0);
-    const doneCount = Object.values(d.tasks).filter(Boolean).length;
-    const moodStars = d.mood ? '★'.repeat(d.mood)+'☆'.repeat(5-d.mood) : '—';
-    const div = document.createElement('div');
-    div.className = 'history-day';
-    div.innerHTML = `
-      <div class="history-top">
-        <span class="history-date">${date}</span>
-        <span class="history-xp">+${d.xpEarned||0} XP</span>
-      </div>
-      <div class="history-meta">学习 ${fmt(mins)} · 支线 ${doneCount}/3 · 心情 ${moodStars}</div>
-      ${d.journal?.top ? `<div class="history-note">💡 ${d.journal.top.slice(0,60)}${d.journal.top.length>60?'...':''}</div>` : ''}
-    `;
-    el.appendChild(div);
-  });
-}
-
-function renderReport() {
-  // Daily
-  const d = getDay();
-  const mins = d.segments.reduce((s,seg)=>s+(seg.e-seg.s),0);
-  const { xp, allDone } = calcDayXp(d);
-  const dailyEl = document.getElementById('daily-report');
-  dailyEl.innerHTML = `
-    <div class="report-card">
-      <div class="report-title">📅 今日 ${todayKey()}</div>
-      <div class="report-row"><span>学习时长</span><span>${fmt(mins)}</span></div>
-      <div class="report-row"><span>支线完成</span><span>${Object.values(d.tasks).filter(Boolean).length}/3</span></div>
-      <div class="report-row"><span>写了日志</span><span>${[d.journal.top,d.journal.stuck,d.journal.feel].filter(s=>s.trim()).length > 0 ? '✓' : '✗'}</span></div>
-      <div class="report-row"><span>今日 XP</span><span>+${xp}</span></div>
-      <div class="report-row"><span>全完成奖励</span><span>${allDone ? '✓ 已触发' : '未完成'}</span></div>
-    </div>
-  `;
-
-  // Weekly
-  const days7 = [];
-  for (let i=0; i<7; i++) {
-    const d2 = new Date(); d2.setDate(d2.getDate()-i);
-    const k = d2.toISOString().slice(0,10);
-    if (state.history[k]) days7.push([k, state.history[k]]);
-  }
-  const totalMins7 = days7.reduce((s,[,d])=> s + d.segments.reduce((a,seg)=>a+(seg.e-seg.s),0), 0);
-  const totalXp7 = days7.reduce((s,[,d])=>s+(d.xpEarned||0),0);
-  const avgMood = days7.length ? (days7.reduce((s,[,d])=>s+(d.mood||0),0)/days7.length).toFixed(1) : '—';
-
-  const weekEl = document.getElementById('weekly-report');
-  weekEl.innerHTML = `
-    <div class="report-card">
-      <div class="report-title">📈 过去7天</div>
-      <div class="report-row"><span>有记录天数</span><span>${days7.length} 天</span></div>
-      <div class="report-row"><span>总学习时长</span><span>${fmt(totalMins7)}</span></div>
-      <div class="report-row"><span>累计 XP</span><span>+${totalXp7}</span></div>
-      <div class="report-row"><span>平均心情</span><span>${avgMood}/5</span></div>
-      <div class="report-row"><span>当前等级</span><span>Lv.${getLevelInfo(state.totalXp).cur.level}</span></div>
-    </div>
-  `;
-}
-
-// ══════════════════════════════════════════
-//  ACTIONS
-// ══════════════════════════════════════════
-function addSegment() {
-  const s = parseInt(document.getElementById('seg-start').value);
-  const e = parseInt(document.getElementById('seg-end').value);
-  if (isNaN(s)||isNaN(e)||s>=e||s<0||e>180) {
-    showToast('⚠ 请输入有效时间段（0~180分钟，开始<结束）'); return;
-  }
-  const d = getDay();
-  const prevXp = calcDayXp(d).xp;
-  d.segments.push({s,e});
-  document.getElementById('seg-start').value='';
-  document.getElementById('seg-end').value='';
-  const { xp } = calcDayXp(d);
-  if (xp > prevXp) spawnXpPopup('+' + (xp-prevXp) + ' XP');
-  checkAllDone();
-  renderAll();
-}
-
-function removeSegment(i) {
-  const d = getDay();
-  d.segments.splice(i,1);
-  renderAll();
-}
-
-function toggleTask(key) {
-  const d = getDay();
-  const prevXp = calcDayXp(d).xp;
-  d.tasks[key] = !d.tasks[key];
-  const { xp } = calcDayXp(d);
-  if (xp > prevXp) spawnXpPopup('+' + (xp-prevXp) + ' XP');
-  checkAllDone();
-  renderAll();
-}
-
-function saveJournal() {
-  const d = getDay();
-  const prevXp = calcDayXp(d).xp;
-  d.journal.top = document.getElementById('j-top').value;
-  d.journal.stuck = document.getElementById('j-stuck').value;
-  d.journal.feel = document.getElementById('j-feel').value;
-  const { xp } = calcDayXp(d);
-  if (xp > prevXp) spawnXpPopup('+'+XP_VAL.journal+' XP');
-  checkAllDone();
-  recalcTotal();
-  save(state);
-}
-
-function setStar(key, val) {
-  const d = getDay();
-  const keyMap = { mood:'mood', energy:'energy', difficulty:'journal.difficulty', focus:'journal.focus', effort:'journal.effort' };
-  if (key === 'mood') d.mood = val;
-  else if (key === 'energy') d.energy = val;
-  else d.journal[key] = val;
-  renderStars(key, val);
-  save(state);
-}
-
-function checkAllDone() {
-  const d = getDay();
-  const { allDone } = calcDayXp(d);
-  if (allDone && !d.rewardShown) {
-    d.rewardShown = true;
-    setTimeout(()=>showReward(), 600);
-  }
-  // level up
-  const prev = getLevelInfo(state.totalXp - (d.xpEarned||0));
-  d.xpEarned = calcDayXp(d).xp;
-  recalcTotal();
-  const cur = getLevelInfo(state.totalXp);
-  if (cur.idx > prev.idx) {
-    setTimeout(()=>showToast(`🎉 升级！${cur.cur.icon} ${cur.cur.name}`), 800);
-  }
-  save(state);
-}
-
-// ══════════════════════════════════════════
-//  UI UTILS
-// ══════════════════════════════════════════
-let toastTimer;
-function showToast(msg) {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(()=>el.classList.remove('show'), 3000);
-}
-
-function showReward() {
-  const r = REWARDS[Math.floor(Math.random()*REWARDS.length)];
-  document.getElementById('modal-icon').textContent = r.icon;
-  document.getElementById('modal-msg').textContent = r.msg;
-  document.getElementById('reward-modal').classList.add('show');
-}
-
-function closeModal() {
-  document.getElementById('reward-modal').classList.remove('show');
-}
-
-function spawnXpPopup(text) {
-  const el = document.createElement('div');
-  el.className = 'xp-popup';
-  el.textContent = text;
-  el.style.left = (40 + Math.random()*200)+'px';
-  el.style.top = '120px';
-  document.body.appendChild(el);
-  setTimeout(()=>el.remove(), 1600);
-}
-
-function switchTab(name) {
-  document.querySelectorAll('.pane').forEach(p=>p.style.display='none');
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  document.getElementById('pane-'+name).style.display='block';
-  document.querySelector(`[onclick="switchTab('${name}')"]`).classList.add('active');
-  if (name==='status'||name==='history'||name==='report') renderAll();
-}
-
-function downloadReport() {
-  const d = getDay();
-  const mins = d.segments.reduce((s,seg)=>s+(seg.e-seg.s),0);
-  const { xp, allDone } = calcDayXp(d);
-  const { cur } = getLevelInfo(state.totalXp);
-  let txt = `Math Quest 复盘报告\n${'='.repeat(30)}\n日期：${todayKey()}\n\n`;
-  txt += `【今日数据】\n学习时长：${fmt(mins)}\n支线任务：${Object.values(d.tasks).filter(Boolean).length}/3\n今日 XP：+${xp}\n全完成：${allDone?'是':'否'}\n\n`;
-  txt += `【内心日志】\n印象最深：${d.journal.top||'—'}\n今日卡点：${d.journal.stuck||'—'}\n今天感受：${d.journal.feel||'—'}\n`;
-  txt += `难度感：${'★'.repeat(d.journal.difficulty||0)}\n专注度：${'★'.repeat(d.journal.focus||0)}\n努力值：${'★'.repeat(d.journal.effort||0)}\n\n`;
-  txt += `【角色状态】\n总 XP：${state.totalXp}\n当前等级：Lv.${cur.level} ${cur.name}\n连击：${state.streak||0} 天\n\n`;
-  txt += '-- 由 Math Quest 生成 --';
-  const blob = new Blob([txt], {type:'text/plain'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `mathquest-${todayKey()}.txt`;
-  a.click();
-}
-
-function copyReport() {
-  const d = getDay();
-  const mins = d.segments.reduce((s,seg)=>s+(seg.e-seg.s),0);
-  const { xp } = calcDayXp(d);
-  const txt = `📚 Math Quest 每日报告 ${todayKey()}\n学习 ${fmt(mins)} · 今日 +${xp} XP · 总 ${state.totalXp} XP · 连击 ${state.streak||0}天\n卡点：${d.journal.stuck||'—'}`;
-  navigator.clipboard.writeText(txt).then(()=>showToast('✓ 已复制到剪贴板'));
-}
-
-// ══════════════════════════════════════════
-//  INIT
-// ══════════════════════════════════════════
-renderAll();
-</script>
+  <script src="./app-client.js"></script>
 </body>
 </html>
