@@ -1,0 +1,269 @@
+body:not(.mq-ready) #app {
+  display: none;
+}
+
+.mq-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background:
+    radial-gradient(circle at top, rgba(245, 200, 66, 0.08), transparent 35%),
+    rgba(10, 14, 26, 0.94);
+}
+
+.mq-hidden {
+  display: none !important;
+}
+
+.mq-card {
+  width: min(100%, 420px);
+  background: #141c2e;
+  border: 1px solid #2a3a5a;
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+.mq-card-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #f5c842;
+  margin-bottom: 10px;
+}
+
+.mq-card-subtitle {
+  color: #94a3b8;
+  font-size: 13px;
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.mq-auth-switch {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.mq-auth-switch button,
+.mq-auth-actions button,
+.mq-mini-btn {
+  border: 1px solid #3d5080;
+  background: #1e2a42;
+  color: #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.mq-auth-switch button.active {
+  border-color: #f5c842;
+  color: #f5c842;
+  background: rgba(245, 200, 66, 0.12);
+}
+
+.mq-auth-form {
+  display: grid;
+  gap: 12px;
+}
+
+.mq-auth-form label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.mq-auth-form input {
+  width: 100%;
+  border: 1px solid #2a3a5a;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 11px 12px;
+  font-size: 14px;
+}
+
+.mq-auth-form input:focus {
+  outline: none;
+  border-color: #00d4aa;
+  box-shadow: 0 0 0 2px rgba(0, 212, 170, 0.12);
+}
+
+.mq-auth-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.mq-auth-submit {
+  background: linear-gradient(135deg, #f5c842, #ff8c00) !important;
+  border-color: #f5c842 !important;
+  color: #000 !important;
+  font-weight: 700;
+}
+
+.mq-auth-error {
+  min-height: 18px;
+  color: #f87171;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.mq-account-bar {
+  margin: 0 16px 16px;
+  padding: 12px 14px;
+  border: 1px solid #2a3a5a;
+  border-radius: 14px;
+  background: rgba(20, 28, 46, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mq-account-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.mq-account-name {
+  color: #f8fafc;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.mq-account-sub {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.mq-account-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.mq-pill {
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 11px;
+  border: 1px solid #2a3a5a;
+  background: #111827;
+  color: #cbd5e1;
+}
+
+.mq-pill.admin {
+  border-color: rgba(245, 200, 66, 0.4);
+  background: rgba(245, 200, 66, 0.12);
+  color: #f5c842;
+}
+
+.mq-pill.error {
+  border-color: rgba(248, 113, 113, 0.3);
+  background: rgba(248, 113, 113, 0.12);
+  color: #f87171;
+}
+
+.mq-admin-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.mq-admin-card,
+.mq-admin-user {
+  border: 1px solid #2a3a5a;
+  border-radius: 12px;
+  background: #111827;
+  padding: 12px;
+}
+
+.mq-admin-card strong {
+  display: block;
+  color: #f8fafc;
+  font-size: 20px;
+  margin-bottom: 6px;
+}
+
+.mq-admin-card span {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.mq-admin-user {
+  margin-top: 10px;
+}
+
+.mq-admin-user-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.mq-admin-user-name {
+  color: #f8fafc;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.mq-admin-user-meta,
+.mq-admin-user-grid,
+.mq-admin-empty {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.mq-admin-user-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.mq-admin-recent {
+  display: grid;
+  gap: 8px;
+}
+
+.mq-admin-day {
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: #0f172a;
+  border: 1px solid #1f2a44;
+}
+
+.mq-admin-day strong {
+  color: #f8fafc;
+  display: inline-block;
+  margin-right: 8px;
+}
+
+.mq-admin-day small {
+  color: #94a3b8;
+}
+
+@media (max-width: 640px) {
+  .mq-account-bar,
+  .mq-admin-user-top,
+  .mq-auth-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mq-account-actions {
+    justify-content: flex-start;
+  }
+}
