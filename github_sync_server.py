@@ -13,6 +13,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+from desktop_runtime import app_data_root
 from server import MathQuestApp, default_state, normalize_state
 
 
@@ -24,13 +25,7 @@ def utc_now_iso() -> str:
 
 
 def local_admin_root() -> Path:
-    if sys.platform.startswith("win"):
-        import os
-
-        base = Path(os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or Path.home())
-    else:
-        base = Path.home() / ".local" / "share"
-    return base / "MathQuestXiaohe"
+    return app_data_root("MathQuestXiaohe")
 
 
 def repo_root() -> Path:
@@ -351,7 +346,7 @@ def export_reviews(conn: sqlite3.Connection, gh: GitHubRepoClient) -> int:
     return exported
 
 
-def run_once(args: argparse.Namespace) -> None:
+def run_once(args: argparse.Namespace) -> str:
     db_path = Path(args.db)
     upload_dir = Path(args.upload_dir)
     initialize_admin_app(db_path, upload_dir)
@@ -360,7 +355,7 @@ def run_once(args: argparse.Namespace) -> None:
         states = import_state_snapshots(conn, gh)
         submissions = import_submissions(conn, gh, upload_dir)
         reviews = export_reviews(conn, gh)
-    print(f"sync-server ok states={states} submissions={submissions} reviews={reviews}")
+    return f"sync-server ok states={states} submissions={submissions} reviews={reviews}"
 
 
 def parse_args() -> argparse.Namespace:
@@ -383,11 +378,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.once:
-        run_once(args)
+        print(run_once(args))
         return 0
     while True:
         try:
-            run_once(args)
+            print(run_once(args))
         except Exception as exc:
             print(f"sync-server error: {exc}")
         time.sleep(max(30, args.interval))

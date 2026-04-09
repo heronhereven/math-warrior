@@ -30,6 +30,14 @@ python gui_app.py
 
 它会自动启动本地服务并打开页面，数据库和上传文件会写入用户本地数据目录。
 
+小和管理端启动器：
+
+```bash
+python gui_admin_app.py
+```
+
+它会自动启动小和本地工作台，并在配置好 GitHub 私有仓库后后台拉取提交、回写审核。
+
 ## GitHub 同步
 
 如果不想正式部署共享后端，可以先用一个**私有 GitHub 仓库**做分钟级同步中转。
@@ -39,6 +47,13 @@ python gui_app.py
 - 这个同步仓库由小和持有
 - 你这边和小和那边都用各自的 token 访问同一个私有仓库
 - 轮询间隔设成 300 秒就能满足“5 分钟内同步”的要求
+
+桌面端配置文件：
+
+- 泡面侠端：`MathQuestDesktop/github-sync.json`
+- 小和端：`MathQuestXiaohe/github-sync-admin.json`
+
+这两个文件都会在首次启动桌面端时自动生成模板。把 `enabled` 改成 `true`，再填好 `owner / repo / token` 即可。
 
 基础命令：
 
@@ -91,6 +106,8 @@ python -m unittest tests.test_server
 - `app-client.js`: 前后台交互逻辑、审核流程、签到和动画
 - `app-extra.css`: 统一视觉样式和交互动效
 - `gui_app.py`: 桌面启动器，自动拉起本地服务并打开页面
+- `gui_admin_app.py`: 小和专用桌面启动器，自动拉起本地后台并处理 GitHub 同步
+- `desktop_runtime.py`: 桌面端公用运行时和定时同步辅助逻辑
 - `github_sync_client.py`: 用户端 GitHub 同步脚本，负责推状态/提交、拉审核
 - `github_sync_server.py`: 小和端 GitHub 同步脚本，负责拉提交、回写审核
 - `tests/test_server.py`: 后端接口测试

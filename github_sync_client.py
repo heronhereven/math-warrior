@@ -13,6 +13,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+from desktop_runtime import app_data_root
 from server import MathQuestApp, default_state, normalize_state
 
 
@@ -24,13 +25,7 @@ def utc_now_iso() -> str:
 
 
 def local_app_root() -> Path:
-    if sys.platform.startswith("win"):
-        import os
-
-        base = Path(os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or Path.home())
-    else:
-        base = Path.home() / ".local" / "share"
-    return base / "MathQuestDesktop"
+    return app_data_root("MathQuestDesktop")
 
 
 def repo_root() -> Path:
@@ -299,7 +294,7 @@ def apply_reviews(conn: sqlite3.Connection, gh: GitHubRepoClient, users: list[sq
     return updated
 
 
-def run_once(args: argparse.Namespace) -> None:
+def run_once(args: argparse.Namespace) -> str:
     db_path = Path(args.db)
     upload_dir = Path(args.upload_dir)
     initialize_local_app(db_path, upload_dir)
@@ -307,14 +302,11 @@ def run_once(args: argparse.Namespace) -> None:
     with connect_db(db_path) as conn:
         users = choose_users(conn, args.username)
         if not users:
-            print("没有找到可同步的泡面侠账号")
-            return
+            return "没有找到可同步的泡面侠账号"
         uploaded_states = upload_state_snapshots(conn, gh, users)
         uploaded_submissions = upload_submissions(conn, gh, upload_dir, users)
         updated_reviews = apply_reviews(conn, gh, users)
-    print(
-        f"sync-client ok states={uploaded_states} submissions={uploaded_submissions} reviews={updated_reviews}"
-    )
+    return f"sync-client ok states={uploaded_states} submissions={uploaded_submissions} reviews={updated_reviews}"
 
 
 def parse_args() -> argparse.Namespace:
@@ -341,11 +333,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.once:
-        run_once(args)
+        print(run_once(args))
         return 0
     while True:
         try:
-            run_once(args)
+            print(run_once(args))
         except Exception as exc:
             print(f"sync-client error: {exc}")
         time.sleep(max(30, args.interval))
