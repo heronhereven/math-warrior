@@ -28,7 +28,7 @@ python server.py --port 9000 --admin-user root --admin-password strongpass123
 python gui_app.py
 ```
 
-它会自动启动本地服务并打开页面，数据库和上传文件会写入用户本地数据目录。
+它会自动启动本地服务，并在浏览器里打开一个本地控制台页面。第一次使用时，直接在控制台里填好 GitHub 同步信息即可，不需要手改 JSON。数据库和上传文件会写入用户本地数据目录。
 
 小和管理端启动器：
 
@@ -36,7 +36,7 @@ python gui_app.py
 python gui_admin_app.py
 ```
 
-它会自动启动小和本地工作台，并在配置好 GitHub 私有仓库后后台拉取提交、回写审核。
+它会自动启动小和本地工作台，并在浏览器里打开一个本地控制台页面。第一次使用时，直接在控制台里填好 GitHub 私有仓库信息即可；之后后台会自动拉取提交、回写审核。
 
 ## GitHub 同步
 
@@ -49,12 +49,12 @@ python gui_admin_app.py
 - 轮询间隔设成 300 秒就能满足“5 分钟内同步”的要求
 - 除了 5 分钟轮询外，本地一旦出现新的可上传内容，也会自动触发一次隐形同步
 
-桌面端配置文件：
+桌面端仍然会把配置保存到本地：
 
 - 泡面侠端：`MathQuestDesktop/github-sync.json`
 - 小和端：`MathQuestXiaohe/github-sync-admin.json`
 
-这两个文件都会在首次启动桌面端时自动生成模板。把 `enabled` 改成 `true`，再填好 `owner / repo / token` 即可。
+但现在正常使用时不需要手改这些文件，直接在桌面控制台里保存设置即可。
 
 同步日志：
 

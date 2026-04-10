@@ -550,6 +550,7 @@ class MathQuestApp:
         static_dir: Path,
         upload_dir: Path | None = None,
         sync_signal_path: Path | None = None,
+        desktop_bridge: Any | None = None,
         admin_username: str = "admin",
         admin_password: str = "admin123456",
         host: str = "127.0.0.1",
@@ -560,6 +561,7 @@ class MathQuestApp:
         self.index_path = self.static_dir / "index.html"
         self.upload_dir = Path(upload_dir) if upload_dir is not None else self.static_dir / "uploads"
         self.sync_signal_path = Path(sync_signal_path) if sync_signal_path is not None else None
+        self.desktop_bridge = desktop_bridge
         self.host = host
         self.port = port
         self.admin_username = admin_username
@@ -1220,6 +1222,160 @@ class MathQuestApp:
             return
         self._serve_static_file(handler, "/index.html")
 
+    def _desktop_meta(self) -> dict[str, Any]:
+        if self.desktop_bridge is None:
+            raise ValueError("桌面控制台未启用")
+        meta = self.desktop_bridge.desktop_meta()
+        if not isinstance(meta, dict):
+            raise ValueError("桌面控制台元数据无效")
+        return meta
+
+    def _serve_desktop_control(self, handler: BaseHTTPRequestHandler) -> None:
+        if self.desktop_bridge is None:
+            self._send_json(handler, HTTPStatus.NOT_FOUND, {"error": "桌面控制台未启用"})
+            return
+        html = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Math Quest Desktop Control</title>
+  <style>
+    :root{color-scheme:dark}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:"Microsoft YaHei UI","Noto Sans SC",sans-serif;background:linear-gradient(180deg,#09111f,#0d1627);color:#eef2ff}
+    .shell{max-width:920px;margin:0 auto;padding:28px 18px 40px;display:grid;gap:18px}
+    .card{background:rgba(20,28,46,.92);border:1px solid rgba(255,255,255,.08);border-radius:24px;padding:20px;box-shadow:0 18px 56px rgba(0,0,0,.28)}
+    .kicker{margin:0 0 8px;color:#f5c842;font-size:12px;letter-spacing:.12em;text-transform:uppercase}
+    h1,h2{margin:0}
+    .copy{margin:10px 0 0;color:#b7c2d8;line-height:1.7}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+    label{display:grid;gap:8px;color:#d8e0f2;font-size:14px}
+    input{width:100%;padding:12px 14px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:#0b1020;color:#eef2ff;font:inherit}
+    .wide{grid-column:1/-1}
+    .actions{display:flex;flex-wrap:wrap;gap:12px}
+    button{border:0;border-radius:16px;padding:12px 16px;font:inherit;cursor:pointer}
+    .primary{background:#f5c842;color:#1f1400;font-weight:700}
+    .accent{background:#00d4aa;color:#06261f;font-weight:700}
+    .ghost{background:#22314e;color:#eef2ff}
+    .status{display:grid;gap:10px}
+    .row{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+    .pill{display:inline-flex;align-items:center;padding:8px 12px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:#b7c2d8}
+    @media (max-width:720px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="card">
+      <p class="kicker">desktop control</p>
+      <h1 id="title">正在准备客户端...</h1>
+      <p class="copy" id="subtitle">请稍等，桌面客户端正在整理本地服务和同步状态。</p>
+    </section>
+    <section class="card status">
+      <div class="row"><strong>本地状态</strong><span class="pill" id="ready-pill">读取中</span></div>
+      <div id="status-text">读取中...</div>
+      <div id="sync-text">读取中...</div>
+      <div class="actions">
+        <button class="primary" id="open-app-btn" type="button">打开应用</button>
+        <button class="accent" id="sync-now-btn" type="button">立即同步</button>
+        <button class="ghost" id="shutdown-btn" type="button">退出客户端</button>
+      </div>
+    </section>
+    <section class="card">
+      <p class="kicker">sync setup</p>
+      <h2>同步设置</h2>
+      <p class="copy">第一次使用时，把仓库拥有者、仓库名和 token 填进去保存就行，不需要手改配置文件。</p>
+      <form id="config-form" class="grid">
+        <label class="wide"><span>启用 GitHub 同步</span><input id="enabled" type="checkbox" style="width:auto;justify-self:start"></label>
+        <label><span>仓库拥有者</span><input id="owner"></label>
+        <label><span>仓库名称</span><input id="repo"></label>
+        <label><span>分支</span><input id="branch"></label>
+        <label><span>同步间隔(秒)</span><input id="interval" type="number" min="30" step="1"></label>
+        <label class="wide" id="username-wrap" hidden><span>你的用户名</span><input id="username"></label>
+        <label class="wide"><span>Token</span><input id="token" type="password"></label>
+        <div class="wide actions">
+          <button class="primary" type="submit">保存设置</button>
+        </div>
+      </form>
+    </section>
+  </main>
+  <script>
+    async function api(path, options = {}) {
+      const request = { credentials: 'same-origin', ...options };
+      if (request.body && typeof request.body !== 'string') {
+        request.headers = { 'Content-Type': 'application/json', ...(request.headers || {}) };
+        request.body = JSON.stringify(request.body);
+      }
+      const response = await fetch(path, request);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || '请求失败');
+      return payload;
+    }
+    function fill(meta) {
+      document.getElementById('title').textContent = meta.title || '桌面客户端';
+      document.getElementById('subtitle').textContent = meta.copy || '本地服务已经准备好。';
+      document.getElementById('status-text').textContent = meta.status_message || '本地服务正在运行。';
+      document.getElementById('sync-text').textContent = meta.sync_status || '同步状态读取中。';
+      document.getElementById('ready-pill').textContent = meta.ready ? '同步已就绪' : '等待配置';
+      const cfg = meta.config || {};
+      document.getElementById('enabled').checked = !!cfg.enabled;
+      document.getElementById('owner').value = cfg.owner || '';
+      document.getElementById('repo').value = cfg.repo || '';
+      document.getElementById('branch').value = cfg.branch || 'main';
+      document.getElementById('interval').value = cfg.interval || 300;
+      document.getElementById('token').value = cfg.token || '';
+      const usernameWrap = document.getElementById('username-wrap');
+      usernameWrap.hidden = !meta.include_username;
+      if (meta.include_username) document.getElementById('username').value = cfg.username || '';
+      document.getElementById('open-app-btn').textContent = meta.action_label || '打开应用';
+    }
+    async function load() {
+      const data = await api('/api/desktop/meta');
+      window.desktopMeta = data;
+      fill(data);
+    }
+    document.getElementById('open-app-btn').addEventListener('click', () => {
+      window.location.href = '/';
+    });
+    document.getElementById('sync-now-btn').addEventListener('click', async () => {
+      await api('/api/desktop/sync-now', { method: 'POST' });
+      await load();
+    });
+    document.getElementById('shutdown-btn').addEventListener('click', async () => {
+      await api('/api/desktop/shutdown', { method: 'POST' });
+      window.close();
+    });
+    document.getElementById('config-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      await api('/api/desktop/config', {
+        method: 'PUT',
+        body: {
+          enabled: document.getElementById('enabled').checked,
+          owner: document.getElementById('owner').value.trim(),
+          repo: document.getElementById('repo').value.trim(),
+          branch: document.getElementById('branch').value.trim(),
+          interval: Number(document.getElementById('interval').value || 300),
+          token: document.getElementById('token').value.trim(),
+          username: document.getElementById('username') ? document.getElementById('username').value.trim() : '',
+        },
+      });
+      await load();
+    });
+    load().catch((error) => {
+      document.getElementById('status-text').textContent = error.message || '读取失败';
+    });
+    setInterval(() => { load().catch(() => {}); }, 3000);
+  </script>
+</body>
+</html>"""
+        content = html.encode("utf-8")
+        handler.send_response(HTTPStatus.OK)
+        handler.send_header("Content-Type", "text/html; charset=utf-8")
+        handler.send_header("Cache-Control", "no-store")
+        handler.send_header("Content-Length", str(len(content)))
+        handler.end_headers()
+        handler.wfile.write(content)
+
     def _serve_static_file(self, handler: BaseHTTPRequestHandler, relative_path: str) -> None:
         candidate = (self.static_dir / relative_path.lstrip("/")).resolve()
         root = self.static_dir.resolve()
@@ -1265,11 +1421,20 @@ class MathQuestApp:
                     if path in {"/", "/index.html"}:
                         app._serve_index(self)
                         return
+                    if path == "/desktop-control":
+                        app._serve_desktop_control(self)
+                        return
                     if path in {"/app-client.js", "/app-extra.css"}:
                         app._serve_static_file(self, path)
                         return
                     if path == "/api/health":
                         app._send_json(self, HTTPStatus.OK, {"ok": True})
+                        return
+                    if path == "/api/desktop/meta":
+                        if app.desktop_bridge is None:
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "桌面控制台未启用"})
+                            return
+                        app._send_json(self, HTTPStatus.OK, app._desktop_meta())
                         return
                     if path == "/api/me":
                         user = app._auth_user(self)
@@ -1510,6 +1675,19 @@ class MathQuestApp:
             def do_POST(self) -> None:
                 try:
                     path = urlparse(self.path).path
+                    if path == "/api/desktop/sync-now":
+                        if app.desktop_bridge is None:
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "桌面控制台未启用"})
+                            return
+                        app._send_json(self, HTTPStatus.OK, app.desktop_bridge.desktop_trigger_sync())
+                        return
+                    if path == "/api/desktop/shutdown":
+                        if app.desktop_bridge is None:
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "桌面控制台未启用"})
+                            return
+                        app.desktop_bridge.desktop_shutdown()
+                        app._send_json(self, HTTPStatus.OK, {"message": "客户端正在退出"})
+                        return
                     if path == "/api/auth/register":
                         body = app._read_json(self)
                         username, password, display_name = app._validate_registration(body)
@@ -1920,6 +2098,13 @@ class MathQuestApp:
             def do_PUT(self) -> None:
                 try:
                     path = urlparse(self.path).path
+                    if path == "/api/desktop/config":
+                        if app.desktop_bridge is None:
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "桌面控制台未启用"})
+                            return
+                        body = app._read_json(self)
+                        app._send_json(self, HTTPStatus.OK, app.desktop_bridge.desktop_save_config(body))
+                        return
                     if path == "/api/me":
                         user = app._auth_user(self)
                         if not user:

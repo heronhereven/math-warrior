@@ -74,6 +74,11 @@ def ensure_json_template(path: Path, template: dict[str, Any]) -> dict[str, Any]
     if not path.exists():
         path.write_text(json.dumps(template, ensure_ascii=False, indent=2), encoding="utf-8")
         return template.copy()
+
+
+def save_json_config(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:

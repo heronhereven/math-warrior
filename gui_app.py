@@ -1,12 +1,12 @@
 import argparse
+import json
 import threading
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from tkinter import BOTH, LEFT, RIGHT, X, Button, Frame, Label, StringVar, Tk
 from types import SimpleNamespace
 
-from desktop_runtime import PeriodicSyncWorker, ensure_json_template, open_external, resource_root, wait_for_health
+from desktop_runtime import PeriodicSyncWorker, ensure_json_template, open_external, save_json_config, resource_root, wait_for_health
 from github_sync_client import local_app_root, run_once as sync_client_once
 from server import MathQuestApp
 
@@ -14,7 +14,7 @@ from server import MathQuestApp
 APP_TITLE = "Math Quest Desktop"
 
 
-def build_math_quest_app(port: int = 0) -> MathQuestApp:
+def build_math_quest_app(port: int = 0, desktop_bridge=None) -> MathQuestApp:
     data_root = local_app_root()
     data_root.mkdir(parents=True, exist_ok=True)
     return MathQuestApp(
@@ -22,6 +22,7 @@ def build_math_quest_app(port: int = 0) -> MathQuestApp:
         static_dir=resource_root(),
         upload_dir=data_root / "uploads",
         sync_signal_path=data_root / "sync-now.flag",
+        desktop_bridge=desktop_bridge,
         admin_username="admin",
         admin_password="admin123456",
         host="127.0.0.1",
@@ -29,154 +30,25 @@ def build_math_quest_app(port: int = 0) -> MathQuestApp:
     )
 
 
-class DesktopWindow:
+class DesktopLauncher:
+    kind = "learner"
+    title = "泡面侠训练站桌面版"
+    action_label = "打开训练站"
+    copy = "双击后会启动本地训练站。第一次使用时，把 GitHub 私有仓库信息填进去保存就行。"
+
     def __init__(self) -> None:
         self.data_root = local_app_root()
         self.data_root.mkdir(parents=True, exist_ok=True)
         self.config_path = self.data_root / "github-sync.json"
-        self.root = Tk()
-        self.root.title(APP_TITLE)
-        self.root.geometry("640x360")
-        self.root.minsize(560, 300)
-        self.root.configure(bg="#0b1020")
+        self.state_path = self.data_root / "launcher-state.json"
         self.server: ThreadingHTTPServer | None = None
         self.server_thread: threading.Thread | None = None
         self.sync_worker: PeriodicSyncWorker | None = None
         self.url = ""
-        self.opened_once = False
-        self.status = StringVar(value="正在启动泡面侠训练站...")
-        self.sync_status = StringVar(value="GitHub 同步尚未配置")
-        self.url_var = StringVar(value="")
-        self._build_ui()
-        self.root.protocol("WM_DELETE_WINDOW", self.close)
-
-    def _build_ui(self) -> None:
-        outer = Frame(self.root, bg="#0b1020", padx=22, pady=22)
-        outer.pack(fill=BOTH, expand=True)
-
-        Label(
-            outer,
-            text="MATH QUEST",
-            fg="#f5c842",
-            bg="#0b1020",
-            font=("Consolas", 16, "bold"),
-        ).pack(anchor="w")
-        Label(
-            outer,
-            text="泡面侠训练站桌面版",
-            fg="#eef2ff",
-            bg="#0b1020",
-            font=("Microsoft YaHei UI", 22, "bold"),
-        ).pack(anchor="w", pady=(10, 8))
-        Label(
-            outer,
-            text="双击后会自动启动本地训练站。配置好 GitHub 私有仓库后，它会在后台把你的提交推给小和，再把回执拉回来。",
-            fg="#b7c2d8",
-            bg="#0b1020",
-            font=("Microsoft YaHei UI", 11),
-            wraplength=560,
-            justify=LEFT,
-        ).pack(anchor="w")
-
-        status_card = Frame(outer, bg="#141c2e", padx=16, pady=16, highlightbackground="#334155", highlightthickness=1)
-        status_card.pack(fill=X, pady=(18, 12))
-        Label(
-            status_card,
-            textvariable=self.status,
-            fg="#eef2ff",
-            bg="#141c2e",
-            font=("Microsoft YaHei UI", 11, "bold"),
-            wraplength=520,
-            justify=LEFT,
-        ).pack(anchor="w")
-        Label(
-            status_card,
-            textvariable=self.url_var,
-            fg="#00ffcc",
-            bg="#141c2e",
-            font=("Consolas", 10),
-        ).pack(anchor="w", pady=(8, 0))
-
-        sync_card = Frame(outer, bg="#12192c", padx=16, pady=14, highlightbackground="#273248", highlightthickness=1)
-        sync_card.pack(fill=X, pady=(0, 14))
-        Label(
-            sync_card,
-            text="GitHub 同步桥",
-            fg="#f5c842",
-            bg="#12192c",
-            font=("Microsoft YaHei UI", 11, "bold"),
-        ).pack(anchor="w")
-        Label(
-            sync_card,
-            textvariable=self.sync_status,
-            fg="#d8e0f2",
-            bg="#12192c",
-            font=("Microsoft YaHei UI", 10),
-            wraplength=520,
-            justify=LEFT,
-        ).pack(anchor="w", pady=(8, 0))
-
-        actions = Frame(outer, bg="#0b1020")
-        actions.pack(fill=X, side="bottom", pady=(12, 0))
-
-        self.open_button = Button(
-            actions,
-            text="打开训练站",
-            state="disabled",
-            command=self.open_browser,
-            bg="#f5c842",
-            fg="#1f1400",
-            activebackground="#ffd166",
-            activeforeground="#1f1400",
-            relief="flat",
-            padx=16,
-            pady=10,
-            font=("Microsoft YaHei UI", 10, "bold"),
-        )
-        self.open_button.pack(side=LEFT)
-
-        self.sync_now_button = Button(
-            actions,
-            text="立即同步",
-            command=self.trigger_sync,
-            bg="#00d4aa",
-            fg="#06261f",
-            activebackground="#00ffcc",
-            activeforeground="#06261f",
-            relief="flat",
-            padx=16,
-            pady=10,
-            font=("Microsoft YaHei UI", 10, "bold"),
-        )
-        self.sync_now_button.pack(side=LEFT, padx=(10, 0))
-
-        Button(
-            actions,
-            text="打开同步配置",
-            command=self.open_config,
-            bg="#23314f",
-            fg="#eef2ff",
-            activebackground="#2d3d64",
-            activeforeground="#eef2ff",
-            relief="flat",
-            padx=16,
-            pady=10,
-            font=("Microsoft YaHei UI", 10),
-        ).pack(side=RIGHT)
-
-        Button(
-            actions,
-            text="退出客户端",
-            command=self.close,
-            bg="#182237",
-            fg="#eef2ff",
-            activebackground="#24314c",
-            activeforeground="#eef2ff",
-            relief="flat",
-            padx=16,
-            pady=10,
-            font=("Microsoft YaHei UI", 10),
-        ).pack(side=RIGHT, padx=(0, 10))
+        self.control_url = ""
+        self.status_message = "正在启动泡面侠训练站..."
+        self.sync_status = "GitHub 同步尚未配置"
+        self.stop_event = threading.Event()
 
     def _config_template(self) -> dict:
         return {
@@ -216,22 +88,21 @@ class DesktopWindow:
         )
 
     def _set_sync_status(self, message: str, is_error: bool = False) -> None:
-        prefix = "同步异常： " if is_error else ""
-        self.root.after(0, lambda: self.sync_status.set(f"{prefix}{message}"))
+        self.sync_status = f"同步异常： {message}" if is_error else message
 
     def _run_sync_once(self) -> str:
         config = self._load_config()
         if not self._sync_ready(config):
-            return f"还没配置好 GitHub 同步。请编辑 {self.config_path.name}，填好 owner / repo / token 并把 enabled 改成 true。"
+            return "还没填好 GitHub 同步信息。点“保存设置”把仓库信息填好就行。"
         return sync_client_once(self._sync_args(config))
 
     def _setup_sync(self) -> None:
         config = self._load_config()
         if not self._sync_ready(config):
-            self.sync_status.set(
-                f"还没配置 GitHub 同步。点击“打开同步配置”编辑 {self.config_path.name}，填好后重启客户端或点“立即同步”。"
-            )
+            self.sync_status = "还没配置 GitHub 同步。先把仓库信息填好，再点“立即同步”或直接开始使用。"
             return
+        if self.sync_worker is not None:
+            self.sync_worker.stop()
         self.sync_worker = PeriodicSyncWorker(
             name="github-client-sync",
             interval=int(config.get("interval", 300) or 300),
@@ -240,53 +111,100 @@ class DesktopWindow:
             signal_path=self.data_root / "sync-now.flag",
         )
         self.sync_worker.start()
-        self.sync_status.set("GitHub 同步已启动，正在后台轮询。")
+        self.sync_status = "GitHub 同步已启动，正在后台轮询。"
 
-    def start(self) -> None:
-        app = build_math_quest_app(port=0)
-        self.server = app.create_server()
-        port = self.server.server_address[1]
-        self.url = f"http://127.0.0.1:{port}"
-        self.url_var.set(self.url)
-        self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.server_thread.start()
-        self._setup_sync()
-        self.root.after(50, self._check_ready)
-        self.root.mainloop()
+    def _save_state_file(self) -> None:
+        save_json_config(
+            self.state_path,
+            {
+                "base_url": self.url,
+                "control_url": self.control_url,
+            },
+        )
 
-    def _check_ready(self) -> None:
+    def _reopen_existing(self) -> bool:
+        if not self.state_path.exists():
+            return False
         try:
-            wait_for_health(self.url, timeout_seconds=0.2)
-            self.status.set("训练站已经准备好了。现在可以直接进入。")
-            self.open_button.config(state="normal")
-            if not self.opened_once:
-                self.opened_once = True
-                self.open_browser()
+            payload = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return False
+        base_url = str(payload.get("base_url", "")).strip()
+        control_url = str(payload.get("control_url", "")).strip()
+        if not base_url or not control_url:
+            return False
+        try:
+            wait_for_health(base_url, timeout_seconds=1.0)
         except Exception:
-            self.root.after(150, self._check_ready)
+            return False
+        open_external(control_url)
+        return True
 
-    def trigger_sync(self) -> None:
+    def desktop_meta(self) -> dict:
+        config = self._load_config()
+        return {
+            "kind": self.kind,
+            "title": self.title,
+            "copy": self.copy,
+            "action_label": self.action_label,
+            "status_message": self.status_message,
+            "sync_status": self.sync_status,
+            "include_username": True,
+            "ready": self._sync_ready(config),
+            "config": config,
+        }
+
+    def desktop_save_config(self, payload: dict) -> dict:
+        config = self._config_template()
+        current = self._load_config()
+        config.update(current)
+        config["enabled"] = bool(payload.get("enabled"))
+        config["owner"] = str(payload.get("owner", "")).strip()
+        config["repo"] = str(payload.get("repo", "")).strip()
+        config["branch"] = str(payload.get("branch", "main")).strip() or "main"
+        config["token"] = str(payload.get("token", "")).strip()
+        config["username"] = str(payload.get("username", "")).strip()
+        try:
+            config["interval"] = max(30, int(payload.get("interval", 300) or 300))
+        except (TypeError, ValueError):
+            config["interval"] = 300
+        save_json_config(self.config_path, config)
+        self._setup_sync()
+        self.sync_status = "同步设置已经保存。"
+        return self.desktop_meta()
+
+    def desktop_trigger_sync(self) -> dict:
         config = self._load_config()
         if not self._sync_ready(config):
-            self.sync_status.set(
-                f"同步配置还没填完。请编辑 {self.config_path.name}，填好 owner / repo / token 并把 enabled 改成 true。"
-            )
-            return
+            self.sync_status = "同步信息还没填完。先把仓库信息补齐。"
+            return self.desktop_meta()
         if self.sync_worker is None:
             self._setup_sync()
         if self.sync_worker is not None:
-            self.sync_status.set("正在手动触发一次同步...")
+            self.sync_status = "正在手动触发一次同步..."
             self.sync_worker.trigger_now()
+        return self.desktop_meta()
 
-    def open_browser(self) -> None:
-        if not self.url:
-            return
-        open_external(self.url)
-        self.status.set("训练站已经在浏览器里打开。只要这个客户端还开着，本地服务和 GitHub 同步都会继续运行。")
+    def desktop_shutdown(self) -> None:
+        threading.Thread(target=self.close, daemon=True).start()
 
-    def open_config(self) -> None:
-        self._load_config()
-        open_external(self.config_path)
+    def start(self) -> int:
+        if self._reopen_existing():
+            return 0
+        app = build_math_quest_app(port=0, desktop_bridge=self)
+        self.server = app.create_server()
+        port = self.server.server_address[1]
+        self.url = f"http://127.0.0.1:{port}"
+        self.control_url = f"{self.url}/desktop-control"
+        self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.server_thread.start()
+        self._setup_sync()
+        wait_for_health(self.url, timeout_seconds=8)
+        self.status_message = "训练站已经准备好了。可以先在控制台里保存同步设置，再打开训练站。"
+        self._save_state_file()
+        open_external(self.control_url)
+        self.stop_event.wait()
+        return 0
 
     def close(self) -> None:
         if self.sync_worker is not None:
@@ -299,23 +217,29 @@ class DesktopWindow:
         if self.server_thread is not None:
             self.server_thread.join(timeout=3)
             self.server_thread = None
-        self.root.destroy()
+        self.state_path.unlink(missing_ok=True)
+        self.stop_event.set()
 
 
 def smoke_test() -> int:
-    app = build_math_quest_app(port=0)
+    launcher = DesktopLauncher()
+    app = build_math_quest_app(port=0, desktop_bridge=launcher)
     server = app.create_server()
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    url = f"http://127.0.0.1:{port}"
+    base_url = f"http://127.0.0.1:{port}"
     try:
-        wait_for_health(url, timeout_seconds=5)
-        with urllib.request.urlopen(url, timeout=2) as response:
+        wait_for_health(base_url, timeout_seconds=5)
+        with urllib.request.urlopen(f"{base_url}/desktop-control", timeout=2) as response:
             html = response.read().decode("utf-8")
-        if "泡面侠训练站" not in html:
-            raise RuntimeError("首页内容不对")
-        print(f"smoke-ok {url}")
+        if "desktop control" not in html.lower():
+            raise RuntimeError("桌面控制台内容不对")
+        with urllib.request.urlopen(f"{base_url}/api/desktop/meta", timeout=2) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if payload.get("kind") != "learner":
+            raise RuntimeError("桌面控制台元数据不对")
+        print(f"smoke-ok {base_url}")
         return 0
     finally:
         server.shutdown()
@@ -329,9 +253,8 @@ def main() -> int:
     args = parser.parse_args()
     if args.smoke_test:
         return smoke_test()
-    window = DesktopWindow()
-    window.start()
-    return 0
+    launcher = DesktopLauncher()
+    return launcher.start()
 
 
 if __name__ == "__main__":

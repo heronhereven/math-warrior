@@ -4,6 +4,8 @@ __pycache__/
 *.db-shm
 *.db-wal
 uploads/
+MathQuestDesktop/
+MathQuestXiaohe/
 test-runtime-*/
 probe-*/
 probe-app-*/
