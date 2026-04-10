@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.db
+*.db-shm
+*.db-wal
+uploads/
+MathQuestDesktop/
+MathQuestXiaohe/
+test-runtime-*/
+probe-*/
+probe-app-*/
+build/
+dist/
+*.spec
