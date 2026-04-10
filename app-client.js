@@ -2333,7 +2333,7 @@
             (item) => `
               <button type="button" class="mq-queue-card ${item.user?.id === app.adminSelectedUserId ? "active" : ""}" data-admin-user-id="${item.user?.id}">
                 <strong>${escapeHtml(item.user?.display_name || item.user?.username || "泡面侠")}</strong>
-                <span>${item.pending_count} 份证明等小和点头</span>
+                <span>${item.pending_count} 份证明待处理</span>
               </button>
             `,
           )
