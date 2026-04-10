@@ -2290,7 +2290,7 @@
     const pendingTotal = users.reduce((sum, item) => sum + (item.pending_count || 0), 0);
     const overCount = users.filter((item) => item.recent_days?.[0]?.progressState === "over").length;
     const activeToday = users.filter((item) => item.summary?.lastActiveDate === currentDayKey()).length;
-    const pendingBonus = (app.adminBonusSubmissions || []).filter((item) => item.status === "pending");
+    const pendingBonus = (app.adminBonusSubmissions || []).filter((item) => item.status === "pending").length;
     const latestTasks = (app.adminBonusTasks || []).slice(0, 3)
       .map((task) => `<div class="mq-proof-note">${escapeHtml(task.title)} · 难度 ${task.difficulty}/5 · ${task.target_days} 天</div>`)
       .join("");
@@ -2299,7 +2299,6 @@
         <div>
           <p class="mq-panel-kicker">xiaohe dashboard</p>
           <h2>小和今天先看哪里</h2>
-          <p>这里不是学习页，而是专门给小和盯进度、回证明、看谁在发光的后台。</p>
         </div>
         <div class="mq-admin-hero-stats">
           ${renderMetricCard("待处理证明", `${pendingTotal} 份`, pendingTotal ? "gold" : "gray")}
@@ -2308,20 +2307,20 @@
           ${renderMetricCard("泡面侠总数", `${users.length} 位`, users.length ? "green" : "gray")}
         </div>
       </section>
-      <section class="mq-panel-card">
-        <div class="mq-panel-head">
-          <div><p class="mq-panel-kicker">bonus mission desk</p><h2>附加任务发布台</h2></div>
-          <span class="mq-soft-note">${pendingBonus.length ? `${pendingBonus.length} 份附加任务提交正在等你` : "新的附加任务会从这里发出去"}</span>
-        </div>
-        <form id="admin-bonus-form" class="mq-proof-form">
-          <label>任务标题<input name="title" placeholder="例如：把今天最卡的题型做成一页小总结" required></label>
-          <label>目标天数<input name="target_days" type="number" min="1" max="30" value="3" required></label>
-          <label class="wide">任务说明<textarea name="description" rows="3" placeholder="告诉泡面侠这份附加任务想练什么。"></textarea></label>
-          <label>难度<input name="difficulty" type="number" min="1" max="5" value="3" required></label>
-          <div class="wide"><button type="submit" class="mq-primary-btn">发布附加任务</button></div>
-        </form>
-        <div class="mq-bonus-admin-list">${latestTasks || `<div class="mq-empty-card">还没有发布过附加任务。</div>`}</div>
-      </section>
+    `;
+    document.getElementById("admin-bonus-desk").innerHTML = `
+      <div class="mq-panel-head">
+        <div><p class="mq-panel-kicker">bonus mission desk</p><h2>附加任务发布台</h2></div>
+        <span class="mq-soft-note">${pendingBonus ? `${pendingBonus} 份附加任务提交正在等你` : "新的附加任务会从这里发出去"}</span>
+      </div>
+      <form id="admin-bonus-form" class="mq-proof-form">
+        <label>任务标题<input name="title" placeholder="例如：把今天最卡的题型做成一页小总结" required></label>
+        <label>目标天数<input name="target_days" type="number" min="1" max="30" value="3" required></label>
+        <label class="wide">任务说明<textarea name="description" rows="3" placeholder="告诉泡面侠这份附加任务想练什么。"></textarea></label>
+        <label>难度<input name="difficulty" type="number" min="1" max="5" value="3" required></label>
+        <div class="wide"><button type="submit" class="mq-primary-btn">发布附加任务</button></div>
+      </form>
+      <div class="mq-bonus-admin-list">${latestTasks || `<div class="mq-empty-card">还没有发布过附加任务。</div>`}</div>
     `;
   }
 

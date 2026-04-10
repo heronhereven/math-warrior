@@ -90,6 +90,7 @@ body {
 
 .mq-topbar,
 .mq-admin-topbar,
+.mq-admin-panel,
 .mq-panel-card,
 .mq-hero-card,
 .mq-auth-card,
@@ -429,6 +430,7 @@ input[type="file"]::file-selector-button {
 
 .mq-hero-card,
 .mq-panel-card,
+.mq-admin-panel,
 .mq-admin-hero-card,
 .mq-admin-focus-card {
   border-radius: 28px;
@@ -440,6 +442,7 @@ input[type="file"]::file-selector-button {
 
 .mq-hero-card,
 .mq-panel-card,
+.mq-admin-panel,
 .mq-admin-hero-card,
 .mq-admin-focus-card { padding: 22px; }
 
@@ -1012,6 +1015,10 @@ input[type="file"]::file-selector-button {
 
 .mq-admin-grid { grid-template-columns: 340px minmax(0, 1fr); align-items: start; }
 .mq-admin-sidebar { display: grid; gap: 20px; }
+.mq-admin-stage,
+.mq-admin-overview,
+.mq-admin-main { min-width: 0; }
+.mq-admin-stage { display: grid; gap: 20px; }
 
 .mq-filter-tabs { margin-bottom: 12px; }
 .mq-admin-user-tabs { display: grid; gap: 10px; }
