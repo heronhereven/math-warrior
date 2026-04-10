@@ -65,6 +65,7 @@
     transport: "remote",
     pendingCheckinDateKey: null,
     dismissedCheckinDateKey: null,
+    proofDraft: defaultProofDraft(),
   };
 
   function defaultState() {
@@ -97,6 +98,29 @@
         bonusLatestTitle: "",
       },
     };
+  }
+
+  function defaultProofDraft() {
+    return {
+      durationMinutes: "",
+      dateKey: localDateKey(),
+      note: "",
+      files: [],
+    };
+  }
+
+  function normalizeEvidenceFiles(raw, fallbackName = "proof", fallbackUrl = "", fallbackMime = "application/octet-stream") {
+    const list = Array.isArray(raw) ? raw : [];
+    const files = list
+      .filter((item) => item && typeof item === "object")
+      .map((item) => ({
+        name: typeof item.name === "string" ? item.name : fallbackName,
+        mime: typeof item.mime === "string" ? item.mime : fallbackMime,
+        url: typeof item.url === "string" ? item.url : "",
+      }))
+      .filter((item) => item.url);
+    if (files.length) return files.slice(0, 9);
+    return fallbackUrl ? [{ name: fallbackName, mime: fallbackMime, url: fallbackUrl }] : [];
   }
 
   function clampInt(value, minimum, maximum, fallback = 0) {
@@ -397,6 +421,7 @@
           evidence_name: typeof item.evidence_name === "string" ? item.evidence_name : "proof",
           evidence_mime: typeof item.evidence_mime === "string" ? item.evidence_mime : "application/octet-stream",
           evidence_url: typeof item.evidence_url === "string" ? item.evidence_url : "",
+          evidence_files: normalizeEvidenceFiles(item.evidence_files, item.evidence_name, item.evidence_url, item.evidence_mime),
         }))
         .filter((item) => item.id > 0 && item.user_id > 0);
     }
@@ -434,6 +459,7 @@
           evidence_name: typeof item.evidence_name === "string" ? item.evidence_name : "proof",
           evidence_mime: typeof item.evidence_mime === "string" ? item.evidence_mime : "application/octet-stream",
           evidence_url: typeof item.evidence_url === "string" ? item.evidence_url : "",
+          evidence_files: normalizeEvidenceFiles(item.evidence_files, item.evidence_name, item.evidence_url, item.evidence_mime),
         }))
         .filter((item) => item.id > 0 && item.user_id > 0 && item.task_id > 0);
     }
@@ -750,6 +776,16 @@
 
     if (path === "/api/submissions" && method === "POST") {
       if (currentUser.is_admin) localError(403, "小和不会在这里提交学习证明");
+      const evidenceFiles = normalizeEvidenceFiles(
+        (Array.isArray(body.evidence_files) ? body.evidence_files : []).map((item) => ({
+          name: item?.name,
+          mime: item?.mime || String((item?.data || "").split(";")[0].replace("data:", "") || "application/octet-stream"),
+          url: item?.data,
+        })),
+        String(body.evidence_name || "proof"),
+        String(body.evidence_data || ""),
+        String((body.evidence_data || "").split(";")[0].replace("data:", "") || "application/octet-stream"),
+      );
       const submission = {
         id: store.nextSubmissionId,
         user_id: currentUser.id,
@@ -764,9 +800,10 @@
         evidence_name: String(body.evidence_name || "proof"),
         evidence_mime: String((body.evidence_data || "").split(";")[0].replace("data:", "") || "application/octet-stream"),
         evidence_url: String(body.evidence_data || ""),
+        evidence_files: evidenceFiles,
       };
       if (!submission.duration_minutes) localError(400, "学习时长至少 1 分钟");
-      if (!submission.evidence_url) localError(400, "每次上传都需要附上凭证");
+      if (!submission.evidence_files.length) localError(400, "每次上传都需要附上凭证");
       store.nextSubmissionId += 1;
       store.submissions.push(submission);
       saveLocalBackend(store);
@@ -782,8 +819,17 @@
       const state = localHydrateState(store, currentUser.id);
       const day = normalizeDay(state.history[completedDateKey]);
       if (!day.checkin.stamped) localError(400, "盖章之后才会解锁附加任务");
-      const evidenceUrl = String(body.evidence_data || "");
-      if (!evidenceUrl) localError(400, "附加任务提交也需要附上凭证");
+      const evidenceFiles = normalizeEvidenceFiles(
+        (Array.isArray(body.evidence_files) ? body.evidence_files : []).map((item) => ({
+          name: item?.name,
+          mime: item?.mime || String((item?.data || "").split(";")[0].replace("data:", "") || "application/octet-stream"),
+          url: item?.data,
+        })),
+        String(body.evidence_name || "proof"),
+        String(body.evidence_data || ""),
+        String((body.evidence_data || "").split(";")[0].replace("data:", "") || "application/octet-stream"),
+      );
+      if (!evidenceFiles.length) localError(400, "附加任务提交也需要附上凭证");
       const submission = {
         id: store.nextBonusSubmissionId,
         task_id: taskId,
@@ -800,7 +846,8 @@
         speed_multiplier: 1,
         evidence_name: String(body.evidence_name || "proof"),
         evidence_mime: String((body.evidence_data || "").split(";")[0].replace("data:", "") || "application/octet-stream"),
-        evidence_url: evidenceUrl,
+        evidence_url: String(body.evidence_data || ""),
+        evidence_files: evidenceFiles,
       };
       store.nextBonusSubmissionId += 1;
       store.bonusTaskSubmissions.push(submission);
@@ -1075,6 +1122,14 @@
     app.lastTotalXp = app.state.totalXp;
   }
 
+  function normalizeSubmissionRecord(item) {
+    if (!item || typeof item !== "object") return null;
+    return {
+      ...item,
+      evidence_files: normalizeEvidenceFiles(item.evidence_files, item.evidence_name, item.evidence_url, item.evidence_mime),
+    };
+  }
+
   async function refreshLearnerBundle(silent = false) {
     const [stateData, submissionData, bonusData] = await Promise.all([
       api("/api/state"),
@@ -1082,9 +1137,9 @@
       api("/api/bonus-tasks"),
     ]);
     mergeServerState(stateData.state, { animate: !silent && app.booted });
-    app.submissions = Array.isArray(submissionData.submissions) ? submissionData.submissions : [];
+    app.submissions = Array.isArray(submissionData.submissions) ? submissionData.submissions.map(normalizeSubmissionRecord).filter(Boolean) : [];
     app.bonusTasks = Array.isArray(bonusData.tasks) ? bonusData.tasks : [];
-    app.bonusSubmissions = Array.isArray(bonusData.submissions) ? bonusData.submissions : [];
+    app.bonusSubmissions = Array.isArray(bonusData.submissions) ? bonusData.submissions.map(normalizeSubmissionRecord).filter(Boolean) : [];
     renderLearner();
   }
 
@@ -1092,7 +1147,7 @@
     const [data, bonusData] = await Promise.all([api("/api/admin/users"), api("/api/admin/bonus-tasks")]);
     app.adminUsers = Array.isArray(data.users) ? data.users : [];
     app.adminBonusTasks = Array.isArray(bonusData.tasks) ? bonusData.tasks : [];
-    app.adminBonusSubmissions = Array.isArray(bonusData.submissions) ? bonusData.submissions : [];
+    app.adminBonusSubmissions = Array.isArray(bonusData.submissions) ? bonusData.submissions.map(normalizeSubmissionRecord).filter(Boolean) : [];
     if (!app.adminUsers.length) {
       app.adminSelectedUserId = null;
       renderAdmin();
@@ -1113,6 +1168,8 @@
       return;
     }
     const detail = await api(`/api/admin/users/${userId}`);
+    if (Array.isArray(detail.submissions)) detail.submissions = detail.submissions.map(normalizeSubmissionRecord).filter(Boolean);
+    if (Array.isArray(detail.bonus_submissions)) detail.bonus_submissions = detail.bonus_submissions.map(normalizeSubmissionRecord).filter(Boolean);
     app.adminDetailCache.set(userId, detail);
     renderAdmin();
   }
@@ -1202,9 +1259,8 @@
     }
   }
 
-  function maybePromptCheckin() {
+  function maybePromptCheckin(dateKey = currentDayKey()) {
     if (app.checkinInFlight || app.pendingCheckinDateKey) return;
-    const dateKey = currentDayKey();
     if (app.dismissedCheckinDateKey === dateKey) return;
     if (shouldPromptCheckin(dateKey)) {
       openCheckinModal(dateKey);
@@ -1220,18 +1276,60 @@
     });
   }
 
+  async function filesToEvidencePayload(files) {
+    const selected = Array.from(files || []).slice(0, 9);
+    const payloads = await Promise.all(
+      selected.map(async (file) => ({
+        name: file.name || "proof",
+        mime: file.type || "application/octet-stream",
+        data: await fileToDataUrl(file),
+      })),
+    );
+    return payloads;
+  }
+
+  function syncProofDraftFromForm(form) {
+    app.proofDraft.durationMinutes = String(form.querySelector("[name='duration_minutes']").value || "");
+    app.proofDraft.dateKey = String(form.querySelector("[name='date_key']").value || currentDayKey());
+    app.proofDraft.note = String(form.querySelector("[name='note']").value || "");
+  }
+
+  async function handleProofFileChange(event) {
+    const input = event.target;
+    if (!input.matches("[name='evidence']")) return;
+    const form = input.closest("form");
+    if (!form) return;
+    syncProofDraftFromForm(form);
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+    if (app.proofDraft.files.length + files.length > 9) {
+      showToast("一次最多上传 9 个凭证文件", "error");
+      input.value = "";
+      return;
+    }
+    try {
+      app.proofDraft.files = app.proofDraft.files.concat(await filesToEvidencePayload(files)).slice(0, 9);
+      input.value = "";
+      renderLearner();
+      showToast(`已经收好 ${app.proofDraft.files.length} 个凭证文件`);
+    } catch (_error) {
+      showToast("读取凭证失败", "error");
+    }
+  }
+
   async function submitProof(event) {
     event.preventDefault();
     const form = event.currentTarget;
-    const minutes = clampInt(form.querySelector("[name='duration_minutes']").value, 0, 720, 0);
-    const dateKey = form.querySelector("[name='date_key']").value || currentDayKey();
-    const note = form.querySelector("[name='note']").value.trim();
-    const file = form.querySelector("[name='evidence']").files?.[0];
+    syncProofDraftFromForm(form);
+    const minutes = clampInt(app.proofDraft.durationMinutes, 0, 720, 0);
+    const dateKey = app.proofDraft.dateKey || currentDayKey();
+    const note = app.proofDraft.note.trim();
+    const evidenceFiles = app.proofDraft.files.slice(0, 9);
     if (!minutes) {
       showToast("先填一个有效的学习时长", "error");
       return;
     }
-    if (!file) {
+    if (!evidenceFiles.length) {
       showToast("每次送出证明都要附上凭证", "error");
       return;
     }
@@ -1239,21 +1337,21 @@
     button.disabled = true;
     button.textContent = "送出中...";
     try {
-      const evidenceData = await fileToDataUrl(file);
       await api("/api/submissions", {
         method: "POST",
         body: {
           date_key: dateKey,
           duration_minutes: minutes,
           note,
-          evidence_name: file.name || "proof",
-          evidence_data: evidenceData,
+          evidence_name: evidenceFiles[0].name || "proof",
+          evidence_data: evidenceFiles[0].data,
+          evidence_files: evidenceFiles,
         },
       });
-      form.reset();
-      form.querySelector("[name='date_key']").value = currentDayKey();
+      app.proofDraft = defaultProofDraft();
       app.dismissedCheckinDateKey = null;
       await refreshLearnerBundle(true);
+      maybePromptCheckin(dateKey);
       showToast("证明已经送到小和桌上啦");
     } catch (error) {
       showToast(error.payload?.error || "送出失败", "error");
@@ -1317,6 +1415,7 @@
     app.adminUsers = [];
     app.adminSelectedUserId = null;
     app.adminDetailCache.clear();
+    app.proofDraft = defaultProofDraft();
     setPollTimer();
     if (showMessage) showToast("已经退出啦");
     showAuth("");
@@ -1327,6 +1426,7 @@
     app.adminDetailCache.clear();
     app.adminSelectedUserId = null;
     app.lastTotalXp = 0;
+    app.proofDraft = defaultProofDraft();
     if (app.user.is_admin) {
       await refreshAdminBundle();
       document.getElementById("learner-app").classList.add("mq-hidden");
@@ -1484,12 +1584,13 @@
                     <span>${submissionStatusLabel(latest.status)}</span>
                     <span>${latest.reward_total ? `+${latest.reward_total} 块泡面` : "等待结算"}</span>
                   </div>
+                  <div class="mq-proof-actions">${renderEvidenceLinks(latest.evidence_files, "查看附加任务凭证")}</div>
                   ${latest.admin_note ? `<div class="mq-proof-note">小和留言：${escapeHtml(latest.admin_note)}</div>` : ""}
                 `
                 : `
                   <form id="${formId}" class="mq-bonus-form" data-bonus-task-id="${task.id}">
                     <textarea name="note" placeholder="写一句你是怎么完成这份附加任务的。"></textarea>
-                    <input name="evidence" type="file" accept="image/*,.pdf" required>
+                    <input name="evidence" type="file" accept="image/*,.pdf" multiple required>
                     <button type="submit" class="mq-primary-btn">提交附加任务凭证</button>
                   </form>
                 `
@@ -1585,12 +1686,24 @@
             </div>
             ${item.note ? `<p>${escapeHtml(item.note)}</p>` : ""}
             ${note}
-            <div class="mq-proof-actions">
-              <a href="${item.evidence_url}" target="_blank" rel="noreferrer">查看凭证</a>
-            </div>
+            <div class="mq-proof-actions">${renderEvidenceLinks(item.evidence_files, "查看凭证")}</div>
           </article>
         `;
       })
+      .join("");
+  }
+
+  function renderEvidenceLinks(evidenceFiles, label = "查看凭证") {
+    const files = normalizeEvidenceFiles(evidenceFiles);
+    if (!files.length) return `<span class="mq-soft-note">还没有凭证文件</span>`;
+    return files
+      .map(
+        (item, index) => `
+          <a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">
+            ${escapeHtml(files.length > 1 ? `${label} ${index + 1}` : label)}
+          </a>
+        `,
+      )
       .join("");
   }
 
@@ -1669,6 +1782,19 @@
     const pending = pendingMinutes(day);
     const ringClass = ringTone(day);
     const goal = day.status.goalMinutes || goalMinutesForDate();
+    const draft = app.proofDraft || defaultProofDraft();
+    const selectedFiles = draft.files.length
+      ? draft.files
+          .map(
+            (file, index) => `
+              <button type="button" class="mq-file-chip" data-remove-proof-file="${index}">
+                <span>${escapeHtml(file.name)}</span>
+                <small>移除</small>
+              </button>
+            `,
+          )
+          .join("")
+      : `<span class="mq-soft-note">还没有挑选凭证文件</span>`;
     return `
       <div class="mq-dashboard-grid">
         <section class="mq-panel-card mq-ring-card ${ringClass}">
@@ -1708,17 +1834,18 @@
           </div>
           <form id="proof-form" class="mq-proof-form">
             <label>学习时长
-              <input name="duration_minutes" type="number" min="1" max="720" placeholder="例如 45" required>
+              <input name="duration_minutes" type="number" min="1" max="720" placeholder="例如 45" value="${escapeHtml(draft.durationMinutes)}" required>
             </label>
             <label>学习日期
-              <input name="date_key" type="date" value="${currentDayKey()}" required>
+              <input name="date_key" type="date" value="${escapeHtml(draft.dateKey || currentDayKey())}" required>
             </label>
             <label class="wide">补充说明
-              <textarea name="note" rows="3" placeholder="写一句今天具体学了什么，或者想让小和先看到什么。"></textarea>
+              <textarea name="note" rows="3" placeholder="写一句今天具体学了什么，或者想让小和先看到什么。">${escapeHtml(draft.note)}</textarea>
             </label>
             <label class="wide">学习凭证
-              <input name="evidence" type="file" accept="image/*,.pdf" required>
+              <input name="evidence" type="file" accept="image/*,.pdf" multiple>
             </label>
+            <div class="wide mq-file-chip-row">${selectedFiles}</div>
             <button type="submit" class="mq-primary-btn">送出学习证明</button>
           </form>
           <p class="mq-helper">今天的目标时长满足后，就会弹出盖章窗口。通过审核前，奖励会先静静等待。</p>
@@ -1880,6 +2007,11 @@
 
     const proofForm = document.getElementById("proof-form");
     if (proofForm) proofForm.addEventListener("submit", submitProof);
+    if (proofForm) {
+      proofForm.addEventListener("input", () => syncProofDraftFromForm(proofForm));
+      const fileInput = proofForm.querySelector("[name='evidence']");
+      if (fileInput) fileInput.addEventListener("change", (event) => void handleProofFileChange(event));
+    }
     document.querySelectorAll("[data-bonus-task-id]").forEach((form) => {
       form.addEventListener("submit", handleBonusSubmission);
     });
@@ -2042,7 +2174,7 @@
                   <span class="mq-proof-badge ${submissionTone(item.status)}">${escapeHtml(submissionStatusLabel(item.status))}</span>
                 </div>
                 ${item.note ? `<p>${escapeHtml(item.note)}</p>` : ""}
-                <div class="mq-proof-actions"><a href="${item.evidence_url}" target="_blank" rel="noreferrer">查看凭证</a></div>
+                <div class="mq-proof-actions">${renderEvidenceLinks(item.evidence_files, "查看凭证")}</div>
                 ${
                   pending
                     ? `
@@ -2074,7 +2206,7 @@
                 <span>${item.reward_total ? `+${item.reward_total} 块泡面` : "等待结算"}</span>
               </div>
               ${item.note ? `<div class="mq-proof-note">${escapeHtml(item.note)}</div>` : ""}
-              <div class="mq-proof-actions"><a href="${item.evidence_url}" target="_blank" rel="noreferrer">查看附加任务凭证</a></div>
+              <div class="mq-proof-actions">${renderEvidenceLinks(item.evidence_files, "查看附加任务凭证")}</div>
               ${
                 item.status === "pending"
                   ? `
@@ -2244,21 +2376,26 @@
     event.preventDefault();
     const form = event.currentTarget;
     const taskId = clampInt(form.dataset.bonusTaskId, 1, 10000000, 0);
-    const file = form.evidence.files?.[0];
-    if (!file) {
+    const files = Array.from(form.evidence.files || []);
+    if (!files.length) {
       showToast("附加任务也要附上凭证", "error");
       return;
     }
+    if (files.length > 9) {
+      showToast("一次最多上传 9 个凭证文件", "error");
+      return;
+    }
     try {
-      const evidenceData = await fileToDataUrl(file);
+      const evidenceFiles = await filesToEvidencePayload(files.slice(0, 9));
       await api("/api/bonus-task-submissions", {
         method: "POST",
         body: {
           task_id: taskId,
           completed_date_key: currentDayKey(),
           note: form.note.value.trim(),
-          evidence_name: file.name || "proof",
-          evidence_data: evidenceData,
+          evidence_name: evidenceFiles[0]?.name || "proof",
+          evidence_data: evidenceFiles[0]?.data || "",
+          evidence_files: evidenceFiles,
         },
       });
       await refreshLearnerBundle(true);
@@ -2309,6 +2446,15 @@
 
     const learnerRoot = document.getElementById("learner-app");
     learnerRoot.addEventListener("click", (event) => {
+      const removeProofFileButton = event.target.closest("[data-remove-proof-file]");
+      if (removeProofFileButton) {
+        const index = clampInt(removeProofFileButton.dataset.removeProofFile, 0, 8, -1);
+        if (index >= 0) {
+          app.proofDraft.files.splice(index, 1);
+          renderLearner();
+        }
+        return;
+      }
       const scoreButton = event.target.closest("[data-score-field]");
       if (scoreButton) {
         const field = scoreButton.dataset.scoreField;

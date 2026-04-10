@@ -94,6 +94,27 @@ def load_user_state(conn: sqlite3.Connection, user_id: int) -> dict[str, Any]:
         return default_state()
 
 
+def submission_evidence_entries(row: sqlite3.Row) -> list[dict[str, str]]:
+    raw = row["evidence_files_json"] if "evidence_files_json" in row.keys() else "[]"
+    try:
+        parsed = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        parsed = []
+    files = []
+    if isinstance(parsed, list):
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            mime = item.get("mime")
+            path = item.get("path")
+            if isinstance(name, str) and isinstance(mime, str) and isinstance(path, str):
+                files.append({"name": name, "mime": mime, "path": path})
+    if files:
+        return files
+    return [{"name": row["evidence_name"], "mime": row["evidence_mime"], "path": row["evidence_path"]}]
+
+
 def generate_submission_fingerprint(
     *,
     username: str,
@@ -179,12 +200,25 @@ def upload_submissions(
         user = user_by_id.get(row["user_id"])
         if user is None:
             continue
-        evidence_suffix = Path(row["evidence_name"]).suffix or mimetypes.guess_extension(row["evidence_mime"] or "") or ".bin"
-        evidence_local_path = upload_dir / row["evidence_path"]
-        if not evidence_local_path.exists():
-            raise FileNotFoundError(f"本地凭证不存在: {evidence_local_path}")
-        evidence_bytes = evidence_local_path.read_bytes()
-        evidence_hash = sha256_hex(evidence_bytes)
+        local_files = submission_evidence_entries(row)
+        evidence_hash_parts = []
+        local_file_payloads = []
+        for index, evidence in enumerate(local_files, start=1):
+            evidence_local_path = upload_dir / evidence["path"]
+            if not evidence_local_path.exists():
+                raise FileNotFoundError(f"本地凭证不存在: {evidence_local_path}")
+            evidence_bytes = evidence_local_path.read_bytes()
+            evidence_file_hash = sha256_hex(evidence_bytes)
+            evidence_hash_parts.append(
+                {
+                    "index": index,
+                    "name": evidence["name"],
+                    "mime": evidence["mime"],
+                    "sha256": evidence_file_hash,
+                }
+            )
+            local_file_payloads.append({"index": index, "name": evidence["name"], "mime": evidence["mime"], "bytes": evidence_bytes})
+        evidence_hash = sha256_hex(json.dumps(evidence_hash_parts, ensure_ascii=False, sort_keys=True))
         fingerprint = generate_submission_fingerprint(
             username=user["username"],
             created_at=row["created_at"],
@@ -194,16 +228,27 @@ def upload_submissions(
             evidence_hash=evidence_hash,
         )
         remote_id = row["remote_submission_id"] or generate_remote_submission_id(user["username"], row["created_at"], fingerprint)
-        proof_remote_path = f"proofs/{user['username']}/{remote_id}{evidence_suffix}"
-        proof_action, proof_sha = gh.put_bytes_if_changed(
-            proof_remote_path,
-            evidence_bytes,
-            f"client: upload proof {remote_id}",
-        )
-        if proof_action == "unchanged":
-            append_sync_log(log_path, "info", "proof-dedupe", "凭证文件已存在，跳过重复上传", submission_id=remote_id)
-        else:
-            append_sync_log(log_path, "info", "proof-sync", "凭证文件已同步", submission_id=remote_id, action=proof_action)
+        uploaded_files = []
+        for evidence in local_file_payloads:
+            evidence_suffix = Path(evidence["name"]).suffix or mimetypes.guess_extension(evidence["mime"] or "") or ".bin"
+            proof_remote_path = f"proofs/{user['username']}/{remote_id}-{evidence['index']}{evidence_suffix}"
+            proof_action, proof_sha = gh.put_bytes_if_changed(
+                proof_remote_path,
+                evidence["bytes"],
+                f"client: upload proof {remote_id}-{evidence['index']}",
+            )
+            if proof_action == "unchanged":
+                append_sync_log(log_path, "info", "proof-dedupe", "凭证文件已存在，跳过重复上传", submission_id=remote_id, attachment=evidence["index"])
+            else:
+                append_sync_log(log_path, "info", "proof-sync", "凭证文件已同步", submission_id=remote_id, attachment=evidence["index"], action=proof_action)
+            uploaded_files.append(
+                {
+                    "name": evidence["name"],
+                    "mime": evidence["mime"],
+                    "path": proof_remote_path,
+                    "sha": proof_sha,
+                }
+            )
 
         state = load_user_state(conn, user["id"])
         day_snapshot = state.get("history", {}).get(row["date_key"], {})
@@ -220,10 +265,11 @@ def upload_submissions(
             "date_key": row["date_key"],
             "duration_minutes": row["duration_minutes"],
             "note": row["note"],
+            "evidence_files": uploaded_files,
             "evidence": {
-                "name": row["evidence_name"],
-                "mime": row["evidence_mime"],
-                "path": proof_remote_path,
+                "name": uploaded_files[0]["name"],
+                "mime": uploaded_files[0]["mime"],
+                "path": uploaded_files[0]["path"],
             },
             "day_snapshot": day_snapshot,
         }
@@ -249,7 +295,7 @@ def upload_submissions(
                 submission_fingerprint = excluded.submission_fingerprint,
                 uploaded_at = excluded.uploaded_at
             """,
-            (row["id"], remote_id, proof_sha, submission_sha, fingerprint, utc_now_iso()),
+            (row["id"], remote_id, uploaded_files[0]["sha"], submission_sha, fingerprint, utc_now_iso()),
         )
         uploaded += 1
     conn.commit()

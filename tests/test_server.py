@@ -1,6 +1,7 @@
 import http.client
 import json
 import os
+import shutil
 import tempfile
 import threading
 import time
@@ -34,7 +35,12 @@ class HttpClient:
         if set_cookie:
             self.cookie = set_cookie.split(";", 1)[0]
         content_type = response.getheader("Content-Type") or ""
-        data = json.loads(raw.decode("utf-8")) if "application/json" in content_type else raw.decode("utf-8")
+        if "application/json" in content_type:
+            data = json.loads(raw.decode("utf-8"))
+        elif content_type.startswith("text/") or "charset=utf-8" in content_type:
+            data = raw.decode("utf-8")
+        else:
+            data = raw
         conn.close()
         return response.status, data
 
@@ -47,9 +53,12 @@ class MathQuestServerTest(unittest.TestCase):
         os.close(handle)
         Path(temp_name).unlink(missing_ok=True)
         cls.db_path = Path(temp_name)
+        cls.upload_dir = cls.repo_root / "test-uploads"
+        cls.upload_dir.mkdir(parents=True, exist_ok=True)
         cls.app = MathQuestApp(
             db_path=cls.db_path,
             static_dir=cls.repo_root,
+            upload_dir=cls.upload_dir,
             admin_username="admin",
             admin_password="admin123456",
             host="127.0.0.1",
@@ -71,6 +80,7 @@ class MathQuestServerTest(unittest.TestCase):
                 Path(f"{cls.db_path}{suffix}").unlink(missing_ok=True)
             except PermissionError:
                 pass
+        shutil.rmtree(cls.upload_dir, ignore_errors=True)
 
     def test_register_login_and_save_state(self):
         client = HttpClient("127.0.0.1", self.port)
@@ -126,9 +136,23 @@ class MathQuestServerTest(unittest.TestCase):
                 "note": "今天先把目标时长送上去",
                 "evidence_name": "proof.txt",
                 "evidence_data": "data:text/plain;base64,SGVsbG8gTWF0aCBRdWVzdA==",
+                "evidence_files": [
+                    {"name": "proof-a.txt", "data": "data:text/plain;base64,SGVsbG8gTWF0aA=="},
+                    {"name": "proof-b.txt", "data": "data:text/plain;base64,UXVlc3QgRmlsZQ=="},
+                ],
             },
         )
         self.assertEqual(status, 201)
+        self.assertEqual(len(data["submission"]["evidence_files"]), 2)
+
+        status, data = client.request("GET", "/api/submissions/mine")
+        self.assertEqual(status, 200)
+        submission = data["submissions"][0]
+        self.assertEqual(len(submission["evidence_files"]), 2)
+
+        status, data = client.request("GET", submission["evidence_files"][1]["url"])
+        self.assertEqual(status, 200)
+        self.assertEqual(data, "Quest File")
 
         status, data = client.request("POST", "/api/checkin", {"date_key": "2026-04-09"})
         self.assertEqual(status, 200)

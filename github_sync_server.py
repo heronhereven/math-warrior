@@ -122,7 +122,11 @@ def submission_fingerprint_from_payload(payload: dict[str, Any], evidence_hash: 
     fingerprint = str(payload.get("submission_fingerprint", "")).strip()
     if fingerprint:
         return fingerprint
-    evidence_ref = payload.get("evidence", {}).get("path", "")
+    evidence_files = payload.get("evidence_files")
+    if isinstance(evidence_files, list) and evidence_files:
+        evidence_ref = [item.get("path", "") for item in evidence_files if isinstance(item, dict)]
+    else:
+        evidence_ref = payload.get("evidence", {}).get("path", "")
     return sha256_hex(
         json.dumps(
             {
@@ -220,11 +224,41 @@ def import_submissions(conn: sqlite3.Connection, gh: GitHubRepoClient, upload_di
             imported += 1
             continue
 
-        proof_path = payload["evidence"]["path"]
-        proof_bytes, _ = gh.get_bytes(proof_path)
-        if proof_bytes is None:
-            raise FileNotFoundError(f"GitHub 中缺少凭证文件: {proof_path}")
-        fingerprint = submission_fingerprint_from_payload(payload, sha256_hex(proof_bytes))
+        remote_evidence_files = payload.get("evidence_files")
+        if not isinstance(remote_evidence_files, list) or not remote_evidence_files:
+            remote_evidence_files = [payload.get("evidence") or {}]
+        local_evidence_files = []
+        evidence_hash_parts = []
+        for index, evidence in enumerate(remote_evidence_files, start=1):
+            if not isinstance(evidence, dict):
+                continue
+            proof_path = str(evidence.get("path", "")).strip()
+            if not proof_path:
+                continue
+            proof_bytes, _ = gh.get_bytes(proof_path)
+            if proof_bytes is None:
+                raise FileNotFoundError(f"GitHub 中缺少凭证文件: {proof_path}")
+            mime = str(evidence.get("mime", "")).strip() or "application/octet-stream"
+            name = str(evidence.get("name", "")).strip() or f"proof-{index}"
+            suffix = Path(name).suffix or mimetypes.guess_extension(mime) or ".bin"
+            local_proof_name = f"github-{remote_submission_id}-{index}{suffix}"
+            (upload_dir / local_proof_name).write_bytes(proof_bytes)
+            local_evidence_files.append({"name": name, "mime": mime, "path": local_proof_name})
+            evidence_hash_parts.append(
+                {
+                    "index": index,
+                    "name": name,
+                    "mime": mime,
+                    "sha256": sha256_hex(proof_bytes),
+                }
+            )
+        if not local_evidence_files:
+            append_sync_log(log_path, "warning", "submission-invalid", "提交缺少可用凭证，已跳过", submission_id=remote_submission_id)
+            continue
+        fingerprint = submission_fingerprint_from_payload(
+            payload,
+            sha256_hex(json.dumps(evidence_hash_parts, ensure_ascii=False, sort_keys=True)),
+        )
         duplicate = conn.execute(
             """
             SELECT local_submission_id, remote_submission_id
@@ -265,24 +299,23 @@ def import_submissions(conn: sqlite3.Connection, gh: GitHubRepoClient, upload_di
             )
             imported += 1
             continue
-        suffix = Path(payload["evidence"]["name"]).suffix or mimetypes.guess_extension(payload["evidence"]["mime"] or "") or ".bin"
-        local_proof_name = f"github-{remote_submission_id}{suffix}"
-        (upload_dir / local_proof_name).write_bytes(proof_bytes)
+        primary_file = local_evidence_files[0]
         conn.execute(
             """
             INSERT INTO study_submissions (
-                user_id, date_key, duration_minutes, note, evidence_name, evidence_mime, evidence_path, status, admin_note, created_at
+                user_id, date_key, duration_minutes, note, evidence_name, evidence_mime, evidence_path, evidence_files_json, status, admin_note, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', '', ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?)
             """,
             (
                 user_id,
                 payload["date_key"],
                 int(payload["duration_minutes"]),
                 str(payload.get("note", ""))[:500],
-                payload["evidence"]["name"],
-                payload["evidence"]["mime"],
-                local_proof_name,
+                primary_file["name"],
+                primary_file["mime"],
+                primary_file["path"],
+                json.dumps(local_evidence_files, ensure_ascii=False),
                 payload.get("submitted_at") or utc_now_iso(),
             ),
         )

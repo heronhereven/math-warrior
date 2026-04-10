@@ -15,14 +15,15 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 
 SESSION_COOKIE = "mq_session"
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{3,24}$")
 PASSWORD_MIN_LENGTH = 6
-MAX_BODY_BYTES = 2 * 1024 * 1024
+MAX_BODY_BYTES = 72 * 1024 * 1024
 MAX_EVIDENCE_BYTES = 5 * 1024 * 1024
+MAX_EVIDENCE_FILES = 9
 PBKDF2_ROUNDS = 120_000
 DAILY_GOAL_MINUTES = 120
 WEEKEND_GOAL_MINUTES = 180
@@ -581,6 +582,7 @@ class MathQuestApp:
                     evidence_name TEXT NOT NULL,
                     evidence_mime TEXT NOT NULL,
                     evidence_path TEXT NOT NULL,
+                    evidence_files_json TEXT NOT NULL DEFAULT '[]',
                     status TEXT NOT NULL DEFAULT 'pending',
                     admin_note TEXT NOT NULL DEFAULT '',
                     reviewed_by INTEGER,
@@ -611,6 +613,7 @@ class MathQuestApp:
                     evidence_name TEXT NOT NULL,
                     evidence_mime TEXT NOT NULL,
                     evidence_path TEXT NOT NULL,
+                    evidence_files_json TEXT NOT NULL DEFAULT '[]',
                     status TEXT NOT NULL DEFAULT 'pending',
                     admin_note TEXT NOT NULL DEFAULT '',
                     reviewed_by INTEGER,
@@ -625,6 +628,26 @@ class MathQuestApp:
                 );
                 """
             )
+            self._ensure_columns(
+                conn,
+                "study_submissions",
+                {
+                    "evidence_files_json": "TEXT NOT NULL DEFAULT '[]'",
+                },
+            )
+            self._ensure_columns(
+                conn,
+                "bonus_task_submissions",
+                {
+                    "evidence_files_json": "TEXT NOT NULL DEFAULT '[]'",
+                },
+            )
+
+    def _ensure_columns(self, conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        for name, sql_type in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
 
     def _hash_password(self, password: str, salt_hex: str | None = None) -> tuple[str, str]:
         salt = bytes.fromhex(salt_hex) if salt_hex else secrets.token_bytes(16)
@@ -873,22 +896,51 @@ class MathQuestApp:
         saved = self._save_raw_user_state(conn, user_id, raw_state)
         return self._hydrate_user_state(conn, user_id, saved)
 
+    def _decode_evidence_payloads(self, body: dict[str, Any]) -> list[dict[str, Any]]:
+        raw_items = body.get("evidence_files")
+        items = raw_items if isinstance(raw_items, list) and raw_items else None
+        if items is None:
+            items = [
+                {
+                    "name": body.get("evidence_name"),
+                    "data": body.get("evidence_data"),
+                }
+            ]
+        if not items:
+            raise ValueError("每次上传都需要附上凭证")
+        if len(items) > MAX_EVIDENCE_FILES:
+            raise ValueError(f"一次最多上传 {MAX_EVIDENCE_FILES} 个凭证文件")
+
+        attachments: list[dict[str, Any]] = []
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                raise ValueError(f"第 {index} 个凭证格式不对")
+            evidence_data = item.get("data")
+            evidence_name = str(item.get("name", "")).strip() or f"evidence-{index}"
+            if not isinstance(evidence_data, str) or not evidence_data.startswith("data:") or ";base64," not in evidence_data:
+                raise ValueError(f"第 {index} 个凭证必须以 base64 data URL 上传")
+            header, encoded = evidence_data.split(",", 1)
+            mime = header[5:].split(";")[0].strip() or "application/octet-stream"
+            try:
+                payload = base64.b64decode(encoded, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError(f"第 {index} 个凭证文件编码无效") from exc
+            if not payload:
+                raise ValueError(f"第 {index} 个凭证不能为空")
+            if len(payload) > MAX_EVIDENCE_BYTES:
+                raise ValueError(f"第 {index} 个凭证大小不能超过 5MB")
+            attachments.append(
+                {
+                    "name": evidence_name[:120],
+                    "mime": mime[:120],
+                    "payload": payload,
+                }
+            )
+        return attachments
+
     def _decode_evidence_payload(self, body: dict[str, Any]) -> tuple[bytes, str, str]:
-        evidence_data = body.get("evidence_data")
-        evidence_name = str(body.get("evidence_name", "")).strip() or "evidence"
-        if not isinstance(evidence_data, str) or not evidence_data.startswith("data:") or ";base64," not in evidence_data:
-            raise ValueError("凭证必须以 base64 data URL 上传")
-        header, encoded = evidence_data.split(",", 1)
-        mime = header[5:].split(";")[0].strip() or "application/octet-stream"
-        try:
-            payload = base64.b64decode(encoded, validate=True)
-        except (ValueError, binascii.Error) as exc:
-            raise ValueError("凭证文件编码无效") from exc
-        if not payload:
-            raise ValueError("凭证不能为空")
-        if len(payload) > MAX_EVIDENCE_BYTES:
-            raise ValueError("凭证大小不能超过 5MB")
-        return payload, evidence_name[:120], mime[:120]
+        item = self._decode_evidence_payloads(body)[0]
+        return item["payload"], item["name"], item["mime"]
 
     def _store_evidence_file(self, payload: bytes, evidence_name: str, mime: str) -> str:
         suffix = Path(evidence_name).suffix
@@ -899,7 +951,68 @@ class MathQuestApp:
         path.write_bytes(payload)
         return filename
 
+    def _store_evidence_files(self, attachments: list[dict[str, Any]]) -> list[dict[str, str]]:
+        stored: list[dict[str, str]] = []
+        for item in attachments:
+            stored.append(
+                {
+                    "name": item["name"],
+                    "mime": item["mime"],
+                    "path": self._store_evidence_file(item["payload"], item["name"], item["mime"]),
+                }
+            )
+        return stored
+
+    def _evidence_files_from_row(self, row: sqlite3.Row, kind: str) -> list[dict[str, str]]:
+        raw = row["evidence_files_json"] if "evidence_files_json" in row.keys() else "[]"
+        try:
+            parsed = json.loads(raw or "[]")
+        except json.JSONDecodeError:
+            parsed = []
+        files: list[dict[str, str]] = []
+        if isinstance(parsed, list):
+            for index, item in enumerate(parsed):
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name")
+                mime = item.get("mime")
+                path = item.get("path")
+                if not isinstance(name, str) or not isinstance(mime, str) or not isinstance(path, str):
+                    continue
+                files.append(
+                    {
+                        "name": name,
+                        "mime": mime,
+                        "url": f"/api/{kind}/{row['id']}/evidence/{index}",
+                    }
+                )
+        if not files:
+            files.append(
+                {
+                    "name": row["evidence_name"],
+                    "mime": row["evidence_mime"],
+                    "url": f"/api/{kind}/{row['id']}/evidence/0",
+                }
+            )
+        return files
+
+    def _evidence_file_payload_from_row(self, row: sqlite3.Row, index: int) -> tuple[Path, str, str]:
+        raw = row["evidence_files_json"] if "evidence_files_json" in row.keys() else "[]"
+        try:
+            parsed = json.loads(raw or "[]")
+        except json.JSONDecodeError:
+            parsed = []
+        if isinstance(parsed, list) and parsed:
+            valid = [item for item in parsed if isinstance(item, dict)]
+            if 0 <= index < len(valid):
+                item = valid[index]
+                return self.upload_dir / str(item.get("path", "")), str(item.get("mime", "")), str(item.get("name", "proof"))
+        if index != 0:
+            raise IndexError("凭证文件不存在")
+        return self.upload_dir / row["evidence_path"], row["evidence_mime"], row["evidence_name"]
+
     def _format_submission(self, row: sqlite3.Row, include_user: bool = False) -> dict[str, Any]:
+        evidence_files = self._evidence_files_from_row(row, "submissions")
         item = {
             "id": row["id"],
             "user_id": row["user_id"],
@@ -912,7 +1025,8 @@ class MathQuestApp:
             "reviewed_at": row["reviewed_at"],
             "evidence_name": row["evidence_name"],
             "evidence_mime": row["evidence_mime"],
-            "evidence_url": f"/api/submissions/{row['id']}/evidence",
+            "evidence_url": evidence_files[0]["url"],
+            "evidence_files": evidence_files,
         }
         if include_user:
             item["user"] = {
@@ -935,6 +1049,7 @@ class MathQuestApp:
         }
 
     def _format_bonus_submission(self, row: sqlite3.Row, include_user: bool = False) -> dict[str, Any]:
+        evidence_files = self._evidence_files_from_row(row, "bonus-task-submissions")
         item = {
             "id": row["id"],
             "task_id": row["task_id"],
@@ -950,7 +1065,8 @@ class MathQuestApp:
             "speed_multiplier": row["speed_multiplier"],
             "evidence_name": row["evidence_name"],
             "evidence_mime": row["evidence_mime"],
-            "evidence_url": f"/api/bonus-task-submissions/{row['id']}/evidence",
+            "evidence_url": evidence_files[0]["url"],
+            "evidence_files": evidence_files,
             "task": {
                 "id": row["task_id"],
                 "title": row["title"],
@@ -1148,13 +1264,13 @@ class MathQuestApp:
                             state = app._load_user_state(conn, user["id"])
                         app._send_json(self, HTTPStatus.OK, {"tasks": tasks, "submissions": submissions, "state": state})
                         return
-                    if path.startswith("/api/submissions/") and path.endswith("/evidence"):
+                    if path.startswith("/api/submissions/") and "/evidence" in path:
                         user = app._auth_user(self)
                         if not user:
                             app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
                             return
                         parts = path.strip("/").split("/")
-                        if len(parts) != 4:
+                        if len(parts) not in {4, 5} or parts[3] != "evidence":
                             app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
                             return
                         try:
@@ -1162,6 +1278,13 @@ class MathQuestApp:
                         except ValueError:
                             app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "提交 ID 无效"})
                             return
+                        attachment_index = 0
+                        if len(parts) == 5:
+                            try:
+                                attachment_index = int(parts[4])
+                            except ValueError:
+                                app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "凭证编号无效"})
+                                return
 
                         with app._connect() as conn:
                             row = conn.execute(
@@ -1175,26 +1298,31 @@ class MathQuestApp:
                             app._send_json(self, HTTPStatus.FORBIDDEN, {"error": "无权查看该凭证"})
                             return
 
-                        evidence_path = app.upload_dir / row["evidence_path"]
+                        try:
+                            evidence_path, evidence_mime, evidence_name = app._evidence_file_payload_from_row(row, attachment_index)
+                        except IndexError:
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "凭证文件不存在"})
+                            return
                         if not evidence_path.exists():
                             app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "凭证文件不存在"})
                             return
 
                         payload = evidence_path.read_bytes()
                         self.send_response(HTTPStatus.OK)
-                        self.send_header("Content-Type", row["evidence_mime"] or "application/octet-stream")
+                        self.send_header("Content-Type", evidence_mime or "application/octet-stream")
+                        self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{quote(evidence_name)}")
                         self.send_header("Cache-Control", "no-store")
                         self.send_header("Content-Length", str(len(payload)))
                         self.end_headers()
                         self.wfile.write(payload)
                         return
-                    if path.startswith("/api/bonus-task-submissions/") and path.endswith("/evidence"):
+                    if path.startswith("/api/bonus-task-submissions/") and "/evidence" in path:
                         user = app._auth_user(self)
                         if not user:
                             app._send_json(self, HTTPStatus.UNAUTHORIZED, {"error": "未登录"})
                             return
                         parts = path.strip("/").split("/")
-                        if len(parts) != 4:
+                        if len(parts) not in {4, 5} or parts[3] != "evidence":
                             app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
                             return
                         try:
@@ -1202,6 +1330,13 @@ class MathQuestApp:
                         except ValueError:
                             app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "提交 ID 无效"})
                             return
+                        attachment_index = 0
+                        if len(parts) == 5:
+                            try:
+                                attachment_index = int(parts[4])
+                            except ValueError:
+                                app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "凭证编号无效"})
+                                return
                         with app._connect() as conn:
                             row = conn.execute("SELECT * FROM bonus_task_submissions WHERE id = ?", (submission_id,)).fetchone()
                         if row is None:
@@ -1210,13 +1345,18 @@ class MathQuestApp:
                         if row["user_id"] != user["id"] and not user["is_admin"]:
                             app._send_json(self, HTTPStatus.FORBIDDEN, {"error": "无权查看该凭证"})
                             return
-                        evidence_path = app.upload_dir / row["evidence_path"]
+                        try:
+                            evidence_path, evidence_mime, evidence_name = app._evidence_file_payload_from_row(row, attachment_index)
+                        except IndexError:
+                            app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "凭证文件不存在"})
+                            return
                         if not evidence_path.exists():
                             app._send_json(self, HTTPStatus.NOT_FOUND, {"error": "凭证文件不存在"})
                             return
                         payload = evidence_path.read_bytes()
                         self.send_response(HTTPStatus.OK)
-                        self.send_header("Content-Type", row["evidence_mime"] or "application/octet-stream")
+                        self.send_header("Content-Type", evidence_mime or "application/octet-stream")
+                        self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{quote(evidence_name)}")
                         self.send_header("Cache-Control", "no-store")
                         self.send_header("Content-Length", str(len(payload)))
                         self.end_headers()
@@ -1432,18 +1572,28 @@ class MathQuestApp:
                         if duration_minutes <= 0:
                             app._send_json(self, HTTPStatus.BAD_REQUEST, {"error": "学习时长至少 1 分钟"})
                             return
-                        payload_bytes, evidence_name, evidence_mime = app._decode_evidence_payload(body)
-                        evidence_path = app._store_evidence_file(payload_bytes, evidence_name, evidence_mime)
+                        evidence_files = app._store_evidence_files(app._decode_evidence_payloads(body))
+                        primary_file = evidence_files[0]
                         now = utc_now_iso()
                         with app._connect() as conn:
                             cur = conn.execute(
                                 """
                                 INSERT INTO study_submissions (
-                                    user_id, date_key, duration_minutes, note, evidence_name, evidence_mime, evidence_path, status, created_at
+                                    user_id, date_key, duration_minutes, note, evidence_name, evidence_mime, evidence_path, evidence_files_json, status, created_at
                                 )
-                                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
                                 """,
-                                (user["id"], date_key, duration_minutes, note, evidence_name, evidence_mime, evidence_path, now),
+                                (
+                                    user["id"],
+                                    date_key,
+                                    duration_minutes,
+                                    note,
+                                    primary_file["name"],
+                                    primary_file["mime"],
+                                    primary_file["path"],
+                                    json.dumps(evidence_files, ensure_ascii=False),
+                                    now,
+                                ),
                             )
                             app._touch_sync_signal()
                             row = conn.execute(
@@ -1501,8 +1651,8 @@ class MathQuestApp:
                         task_id = clamp_int(body.get("task_id"), 1, 10_000_000, 0)
                         note = str(body.get("note", "")).strip()[:500]
                         completed_date_key = normalize_date_key(body.get("completed_date_key"))
-                        payload_bytes, evidence_name, evidence_mime = app._decode_evidence_payload(body)
-                        evidence_path = app._store_evidence_file(payload_bytes, evidence_name, evidence_mime)
+                        evidence_files = app._store_evidence_files(app._decode_evidence_payloads(body))
+                        primary_file = evidence_files[0]
                         now = utc_now_iso()
                         with app._connect() as conn:
                             state = app._load_user_state(conn, user["id"])
@@ -1517,11 +1667,21 @@ class MathQuestApp:
                             cur = conn.execute(
                                 """
                                 INSERT INTO bonus_task_submissions (
-                                    task_id, user_id, completed_date_key, note, evidence_name, evidence_mime, evidence_path, status, created_at
+                                    task_id, user_id, completed_date_key, note, evidence_name, evidence_mime, evidence_path, evidence_files_json, status, created_at
                                 )
-                                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
                                 """,
-                                (task_id, user["id"], completed_date_key, note, evidence_name, evidence_mime, evidence_path, now),
+                                (
+                                    task_id,
+                                    user["id"],
+                                    completed_date_key,
+                                    note,
+                                    primary_file["name"],
+                                    primary_file["mime"],
+                                    primary_file["path"],
+                                    json.dumps(evidence_files, ensure_ascii=False),
+                                    now,
+                                ),
                             )
                             app._touch_sync_signal()
                             row = conn.execute(
