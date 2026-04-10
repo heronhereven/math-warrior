@@ -332,6 +332,47 @@ def checkin_combo_days(history: dict[str, Any], date_key: str) -> int:
     return combo
 
 
+def repeated_stamp_bias(history: dict[str, Any], date_key: str) -> tuple[str, int]:
+    cursor = parse_date_key(date_key)
+    if not cursor:
+        return "", 0
+    previous_date = cursor - timedelta(days=1)
+    emoji = ""
+    combo = 0
+    while True:
+        previous = normalize_checkin(history.get(previous_date.isoformat(), {}).get("checkin"))
+        if not previous["stamped"] or not previous["emoji"]:
+            break
+        if not emoji:
+            emoji = previous["emoji"]
+        elif previous["emoji"] != emoji:
+            break
+        combo += 1
+        previous_date -= timedelta(days=1)
+    return emoji, combo
+
+
+def pick_stamp(history: dict[str, Any], date_key: str) -> dict[str, Any]:
+    biased_emoji, combo_days = repeated_stamp_bias(history, date_key)
+    weighted_pool: list[tuple[dict[str, Any], float]] = []
+    total_weight = 0.0
+    for item in STAMP_POOL:
+        weight = float(item["weight"])
+        if biased_emoji and item["emoji"] == biased_emoji:
+            weight *= 1.9 + min(4, combo_days) * 0.35
+        weighted_pool.append((item, weight))
+        total_weight += weight
+
+    roll = random.uniform(0, total_weight)
+    picked = STAMP_POOL[-1]
+    for item, weight in weighted_pool:
+        roll -= weight
+        if roll <= 0:
+            picked = item
+            break
+    return picked
+
+
 def compute_stamp_reward(rarity: int, combo_days: int, approved_minutes: int, goal_minutes: int) -> tuple[int, int]:
     if rarity <= 0 or approved_minutes < goal_minutes:
         return 0, combo_days
@@ -869,14 +910,7 @@ class MathQuestApp:
             self._save_raw_user_state(conn, user_id, raw_state)
             return self._hydrate_user_state(conn, user_id, raw_state)
 
-        total_weight = sum(item["weight"] for item in STAMP_POOL)
-        roll = random.uniform(0, total_weight)
-        picked = STAMP_POOL[-1]
-        for item in STAMP_POOL:
-            roll -= item["weight"]
-            if roll <= 0:
-                picked = item
-                break
+        picked = pick_stamp(history, date_key)
 
         day["checkin"] = {
             "stamped": True,

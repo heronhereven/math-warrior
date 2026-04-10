@@ -65,6 +65,8 @@
     transport: "remote",
     pendingCheckinDateKey: null,
     dismissedCheckinDateKey: null,
+    calendarPulseDateKey: null,
+    reviewNotice: null,
     proofDraft: defaultProofDraft(),
   };
 
@@ -297,6 +299,28 @@
     return weekday === 0 || weekday === 6 ? WEEKEND_GOAL_MINUTES : DAILY_GOAL_MINUTES;
   }
 
+  function repeatedStampBias(history, dateKey) {
+    const parsed = parseDateKey(dateKey);
+    if (!parsed) return null;
+    let cursor = new Date(`${dateKey}T12:00:00`);
+    cursor.setDate(cursor.getDate() - 1);
+    let comboDays = 0;
+    let emoji = "";
+    while (true) {
+      const previousKey = localDateKey(cursor);
+      const previous = normalizeDay(history?.[previousKey]);
+      if (!previous.checkin.stamped || !previous.checkin.emoji) break;
+      if (!emoji) {
+        emoji = previous.checkin.emoji;
+      } else if (previous.checkin.emoji !== emoji) {
+        break;
+      }
+      comboDays += 1;
+      cursor.setDate(cursor.getDate() - 1);
+    }
+    return emoji ? { emoji, comboDays } : null;
+  }
+
   function ensureDay(dateKey = currentDayKey()) {
     if (!app.state.history[dateKey]) {
       app.state.history[dateKey] = defaultDay();
@@ -498,14 +522,23 @@
     return Math.round(14 * (Math.exp(minutes / 95) - 1));
   }
 
-  function pickLocalStamp() {
-    const totalWeight = STAMP_POOL.reduce((sum, item) => sum + item.weight, 0);
+  function pickLocalStamp(dateKey = currentDayKey(), history = app.state.history) {
+    const bias = repeatedStampBias(history, dateKey);
+    const weightedPool = STAMP_POOL.map((item) => ({
+      ...item,
+      adjustedWeight:
+        item.weight
+        * (bias && item.emoji === bias.emoji
+          ? 1.9 + Math.min(4, bias.comboDays) * 0.35
+          : 1),
+    }));
+    const totalWeight = weightedPool.reduce((sum, item) => sum + item.adjustedWeight, 0);
     let roll = Math.random() * totalWeight;
-    for (const item of STAMP_POOL) {
-      roll -= item.weight;
+    for (const item of weightedPool) {
+      roll -= item.adjustedWeight;
       if (roll <= 0) return item;
     }
-    return STAMP_POOL[STAMP_POOL.length - 1];
+    return weightedPool[weightedPool.length - 1];
   }
 
   function localHydrateState(store, userId) {
@@ -730,7 +763,7 @@
       const eligibleMinutes = todaySubs.reduce((sum, item) => sum + item.duration_minutes, 0);
       if (eligibleMinutes < goalMinutesForDate(dateKey)) localError(400, "完成当日目标时长对应的学习提交后，才可以盖章");
       if (!day.checkin.stamped) {
-        const stamp = pickLocalStamp();
+        const stamp = pickLocalStamp(dateKey, raw.history);
         day.checkin = {
           stamped: true,
           emoji: stamp.emoji,
@@ -1130,16 +1163,116 @@
     };
   }
 
+  function reviewMoment(item) {
+    const parsed = new Date(item?.reviewed_at || "");
+    return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+  }
+
+  function latestReviewedChange(previousItems, nextItems, kind) {
+    const previous = new Map(
+      (previousItems || []).map((item) => [
+        `${kind}:${item.id}`,
+        { status: item.status, reviewed_at: item.reviewed_at || "" },
+      ]),
+    );
+    let latest = null;
+    for (const item of nextItems || []) {
+      if (!item || item.status === "pending" || !item.reviewed_at) continue;
+      const key = `${kind}:${item.id}`;
+      const before = previous.get(key);
+      if (before && before.status === item.status && before.reviewed_at === (item.reviewed_at || "")) continue;
+      const moment = reviewMoment(item);
+      if (!latest || moment > latest.moment) {
+        latest = { kind, item, moment };
+      }
+    }
+    return latest;
+  }
+
+  function buildReviewNotice(change) {
+    if (!change) return null;
+    const { kind, item } = change;
+    if (kind === "study") {
+      if (item.status === "approved") {
+        const canStamp = canStampDate(item.date_key);
+        return {
+          tone: canStamp ? "gold" : "green",
+          title: "小和刚刚回信了",
+          copy: canStamp
+            ? "这份学习证明已经被小和点头了。今天的印章入口亮起来了。"
+            : "这份学习证明已经被小和点头了，圆环和奖励也跟着亮了一些。",
+          action: canStamp ? "stamp" : "calendar",
+          actionLabel: canStamp ? "去盖今天的章" : "去看月历",
+          dateKey: item.date_key,
+          note: item.admin_note || "",
+        };
+      }
+      return {
+        tone: "red",
+        title: "小和有新的提醒",
+        copy: "这份学习证明还需要再补一点，小和已经把想说的话写给你了。",
+        action: "dashboard",
+        actionLabel: "去看回信",
+        dateKey: item.date_key,
+        note: item.admin_note || "",
+      };
+    }
+    if (item.status === "approved") {
+      return {
+        tone: "gold",
+        title: "小和给附加任务发奖励了",
+        copy: "这份附加任务刚被点头通过，额外泡面已经准备好掉下来。",
+        action: "bonus",
+        actionLabel: "去看附加任务",
+        dateKey: item.completed_date_key,
+        note: item.admin_note || "",
+      };
+    }
+    return {
+      tone: "red",
+      title: "小和看了附加任务",
+      copy: "这份附加任务还可以再补一点内容，小和留了新的回信。",
+      action: "bonus",
+      actionLabel: "去看附加任务",
+      dateKey: item.completed_date_key,
+      note: item.admin_note || "",
+    };
+  }
+
+  function syncLearnerReviewNotice(nextSubmissions, nextBonusSubmissions) {
+    const studyChange = latestReviewedChange(app.submissions, nextSubmissions, "study");
+    const bonusChange = latestReviewedChange(app.bonusSubmissions, nextBonusSubmissions, "bonus");
+    const latest = !studyChange
+      ? bonusChange
+      : !bonusChange
+        ? studyChange
+        : studyChange.moment >= bonusChange.moment
+          ? studyChange
+          : bonusChange;
+    if (!latest) return;
+    if (latest.kind === "study") {
+      app.dismissedCheckinDateKey = null;
+      if (latest.item.status === "approved") setCalendarPulse(latest.item.date_key);
+    }
+    app.reviewNotice = buildReviewNotice(latest);
+    showToast(app.reviewNotice?.title || "小和回信了");
+  }
+
   async function refreshLearnerBundle(silent = false) {
     const [stateData, submissionData, bonusData] = await Promise.all([
       api("/api/state"),
       api("/api/submissions/mine"),
       api("/api/bonus-tasks"),
     ]);
+    const nextSubmissions = Array.isArray(submissionData.submissions) ? submissionData.submissions.map(normalizeSubmissionRecord).filter(Boolean) : [];
+    const nextBonusSubmissions = Array.isArray(bonusData.submissions) ? bonusData.submissions.map(normalizeSubmissionRecord).filter(Boolean) : [];
     mergeServerState(stateData.state, { animate: !silent && app.booted });
-    app.submissions = Array.isArray(submissionData.submissions) ? submissionData.submissions.map(normalizeSubmissionRecord).filter(Boolean) : [];
+    if (silent && app.booted) {
+      syncLearnerReviewNotice(nextSubmissions, nextBonusSubmissions);
+    }
+    app.submissions = nextSubmissions;
     app.bonusTasks = Array.isArray(bonusData.tasks) ? bonusData.tasks : [];
-    app.bonusSubmissions = Array.isArray(bonusData.submissions) ? bonusData.submissions.map(normalizeSubmissionRecord).filter(Boolean) : [];
+    app.bonusSubmissions = nextBonusSubmissions;
     renderLearner();
   }
 
@@ -1215,6 +1348,35 @@
     return !day.checkin.stamped && submittedMinutes(day) >= goalMinutesForDate(dateKey);
   }
 
+  function canStampDate(dateKey = currentDayKey()) {
+    if (!app.user || app.user.is_admin) return false;
+    const day = ensureDay(dateKey);
+    return !day.checkin.stamped && submittedMinutes(day) >= goalMinutesForDate(dateKey);
+  }
+
+  function setCalendarPulse(dateKey) {
+    if (!dateKey) return;
+    app.calendarPulseDateKey = dateKey;
+    window.clearTimeout(setCalendarPulse.timer);
+    setCalendarPulse.timer = window.setTimeout(() => {
+      app.calendarPulseDateKey = null;
+      if (app.user && !app.user.is_admin && app.learnerView === "calendar") renderLearner();
+    }, 2200);
+  }
+
+  function jumpToCalendarDate(dateKey, { openStamp = false } = {}) {
+    const parsed = parseDateKey(dateKey);
+    if (parsed) {
+      app.calendarCursor = new Date(parsed.getFullYear(), parsed.getMonth(), 1);
+    }
+    app.learnerView = "calendar";
+    setCalendarPulse(dateKey);
+    renderLearner();
+    if (openStamp) {
+      window.setTimeout(() => openCheckinModal(dateKey), 220);
+    }
+  }
+
   function openCheckinModal(dateKey = currentDayKey()) {
     app.pendingCheckinDateKey = dateKey;
     app.dismissedCheckinDateKey = null;
@@ -1249,6 +1411,7 @@
       playStampSound();
       app.pendingCheckinDateKey = null;
       app.dismissedCheckinDateKey = null;
+      if (app.reviewNotice?.dateKey === dateKey) app.reviewNotice = null;
       document.getElementById("checkin-modal").classList.add("mq-hidden");
       renderLearner();
       showToast(`${data.checkin?.emoji || "🫶"} 今天的印章盖好了，等小和点头后奖励会落下来`);
@@ -1415,6 +1578,8 @@
     app.adminUsers = [];
     app.adminSelectedUserId = null;
     app.adminDetailCache.clear();
+    app.reviewNotice = null;
+    app.calendarPulseDateKey = null;
     app.proofDraft = defaultProofDraft();
     setPollTimer();
     if (showMessage) showToast("已经退出啦");
@@ -1426,6 +1591,8 @@
     app.adminDetailCache.clear();
     app.adminSelectedUserId = null;
     app.lastTotalXp = 0;
+    app.reviewNotice = null;
+    app.calendarPulseDateKey = null;
     app.proofDraft = defaultProofDraft();
     if (app.user.is_admin) {
       await refreshAdminBundle();
@@ -1707,6 +1874,27 @@
       .join("");
   }
 
+  function renderReviewNotice() {
+    if (!app.reviewNotice) return "";
+    const notice = app.reviewNotice;
+    return `
+      <section class="mq-panel-card mq-review-banner ${escapeHtml(notice.tone || "")}">
+        <div class="mq-panel-head">
+          <div>
+            <p class="mq-panel-kicker">xiaohe note</p>
+            <h2>${escapeHtml(notice.title)}</h2>
+          </div>
+          <button type="button" class="mq-ghost-btn" data-dismiss-review-notice="1">先放旁边</button>
+        </div>
+        <p class="mq-review-copy">${escapeHtml(notice.copy)}</p>
+        ${notice.note ? `<p class="mq-proof-note">小和留言：${escapeHtml(notice.note)}</p>` : ""}
+        <div class="mq-review-actions">
+          <button type="button" class="mq-primary-btn" data-review-notice-action="${escapeHtml(notice.action || "dashboard")}" data-review-date-key="${escapeHtml(notice.dateKey || currentDayKey())}">${escapeHtml(notice.actionLabel || "去看看")}</button>
+        </div>
+      </section>
+    `;
+  }
+
   function renderCalendarLegend() {
     return STAMP_POOL.slice()
       .sort((left, right) => right.rarity - left.rarity)
@@ -1719,6 +1907,44 @@
         `,
       )
       .join("");
+  }
+
+  function renderCalendarAction() {
+    const dateKey = currentDayKey();
+    const day = ensureDay(dateKey);
+    const goal = day.status.goalMinutes || goalMinutesForDate(dateKey);
+    if (day.checkin.stamped) {
+      return `
+        <section class="mq-calendar-cta">
+          <div>
+            <p class="mq-panel-kicker">stamp ready</p>
+            <h3>今天的印章已经贴好了</h3>
+            <p class="mq-soft-note">奖励会跟着小和的审核结果一起慢慢亮起来。</p>
+          </div>
+        </section>
+      `;
+    }
+    if (canStampDate(dateKey)) {
+      return `
+        <section class="mq-calendar-cta ready ${app.calendarPulseDateKey === dateKey ? "ring-pulse" : ""}">
+          <div>
+            <p class="mq-panel-kicker">stamp ready</p>
+            <h3>今天可以盖章了</h3>
+            <p class="mq-soft-note">不想立刻盖也没关系，按钮会一直在这里等你。</p>
+          </div>
+          <button type="button" class="mq-primary-btn mq-stamp-cta-btn" data-open-checkin-date="${escapeHtml(dateKey)}">盖上今天的大印章</button>
+        </section>
+      `;
+    }
+    return `
+      <section class="mq-calendar-cta">
+        <div>
+          <p class="mq-panel-kicker">stamp track</p>
+          <h3>还差一点点就能盖章</h3>
+          <p class="mq-soft-note">把今天的学习证明送够 ${goal} 分钟，盖章按钮就会在这里亮起来。</p>
+        </div>
+      </section>
+    `;
   }
 
   function renderCalendarGrid() {
@@ -1739,6 +1965,7 @@
       const isCurrentMonth = current.getMonth() === month;
       const isToday = key === currentDayKey();
       const stamped = day.checkin.stamped;
+      const pulse = app.calendarPulseDateKey === key;
       const tone = stamped
         ? day.status.rewardState === "over"
           ? "gold"
@@ -1748,14 +1975,18 @@
         : "";
       const stampHtml = stamped
         ? `
-          <div class="mq-stamp-wrap ${tone} ${app.latestStampDate === key ? "thunk" : ""}">
+          <div class="mq-stamp-wrap ${tone} ${app.latestStampDate === key ? "thunk" : ""} ${pulse ? "ring-pulse" : ""}">
             <div class="mq-stamp-ring ${tone}"></div>
             <div class="mq-stamp-emoji">${day.checkin.emoji}</div>
           </div>
         `
-        : `<div class="mq-stamp-wrap empty"></div>`;
+        : `
+          <div class="mq-stamp-wrap empty ${pulse ? "ring-pulse ready-slot" : ""}">
+            ${pulse ? `<div class="mq-stamp-ring gray"></div>` : ""}
+          </div>
+        `;
       cells.push(`
-        <article class="mq-calendar-cell ${isCurrentMonth ? "" : "muted"} ${isToday ? "today" : ""}" data-date-key="${key}">
+        <article class="mq-calendar-cell ${isCurrentMonth ? "" : "muted"} ${isToday ? "today" : ""} ${pulse ? "review-pulse" : ""}" data-date-key="${key}">
           <span class="mq-calendar-daynum">${current.getDate()}</span>
           ${stampHtml}
         </article>
@@ -1783,6 +2014,7 @@
     const ringClass = ringTone(day);
     const goal = day.status.goalMinutes || goalMinutesForDate();
     const draft = app.proofDraft || defaultProofDraft();
+    const reviewNotice = renderReviewNotice();
     const selectedFiles = draft.files.length
       ? draft.files
           .map(
@@ -1796,6 +2028,7 @@
           .join("")
       : `<span class="mq-soft-note">还没有挑选凭证文件</span>`;
     return `
+      ${reviewNotice}
       <div class="mq-dashboard-grid">
         <section class="mq-panel-card mq-ring-card ${ringClass}">
           <div class="mq-panel-head">
@@ -1917,7 +2150,7 @@
     const goalDays = days.filter(([, rawDay]) => normalizeDay(rawDay).status.progressState === "goal").length;
     const pendingDays = days.filter(([, rawDay]) => pendingMinutes(normalizeDay(rawDay)) > 0).length;
     return `
-      <div class="mq-dashboard-grid">
+      <div class="mq-journey-top-grid">
         <section class="mq-panel-card">
           <div class="mq-panel-head">
             <div><p class="mq-panel-kicker">milestones</p><h2>成长里程碑</h2></div>
@@ -1991,8 +2224,8 @@
         <section class="mq-panel-card">
           <div class="mq-panel-head">
             <div><p class="mq-panel-kicker">month stamps</p><h2>整张印章月历</h2></div>
-            <div class="mq-legend-row">${renderCalendarLegend()}</div>
           </div>
+          ${renderCalendarAction()}
           ${renderCalendarGrid()}
         </section>
       `,
@@ -2446,6 +2679,41 @@
 
     const learnerRoot = document.getElementById("learner-app");
     learnerRoot.addEventListener("click", (event) => {
+      const dismissReviewNotice = event.target.closest("[data-dismiss-review-notice]");
+      if (dismissReviewNotice) {
+        app.reviewNotice = null;
+        renderLearner();
+        return;
+      }
+      const reviewAction = event.target.closest("[data-review-notice-action]");
+      if (reviewAction) {
+        const action = reviewAction.dataset.reviewNoticeAction;
+        const dateKey = reviewAction.dataset.reviewDateKey || currentDayKey();
+        app.reviewNotice = null;
+        if (action === "stamp") {
+          jumpToCalendarDate(dateKey, { openStamp: true });
+        } else if (action === "calendar") {
+          jumpToCalendarDate(dateKey);
+        } else if (action === "bonus") {
+          app.learnerView = "dashboard";
+          renderLearner();
+          window.setTimeout(() => {
+            document.querySelector(".mq-bonus-list")?.scrollIntoView({ behavior: "smooth", block: "center" });
+          }, 80);
+        } else {
+          app.learnerView = "dashboard";
+          renderLearner();
+          window.setTimeout(() => {
+            document.querySelector(".mq-proof-list")?.scrollIntoView({ behavior: "smooth", block: "center" });
+          }, 80);
+        }
+        return;
+      }
+      const openCheckinButton = event.target.closest("[data-open-checkin-date]");
+      if (openCheckinButton) {
+        openCheckinModal(openCheckinButton.dataset.openCheckinDate || currentDayKey());
+        return;
+      }
       const removeProofFileButton = event.target.closest("[data-remove-proof-file]");
       if (removeProofFileButton) {
         const index = clampInt(removeProofFileButton.dataset.removeProofFile, 0, 8, -1);

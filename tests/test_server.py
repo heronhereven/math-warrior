@@ -8,7 +8,7 @@ import time
 import unittest
 from pathlib import Path
 
-from server import MathQuestApp
+from server import MathQuestApp, repeated_stamp_bias
 
 
 class HttpClient:
@@ -279,6 +279,16 @@ class MathQuestServerTest(unittest.TestCase):
         self.assertEqual(total_minutes, 75)
         self.assertGreater(data["state"]["totalXp"], 0)
         self.assertEqual(data["state"]["history"]["2026-04-08"]["checkin"]["rewardXp"], 0)
+
+    def test_repeated_stamp_bias_reads_previous_combo(self):
+        history = {
+            "2026-04-07": {"checkin": {"stamped": True, "emoji": "🐶"}},
+            "2026-04-08": {"checkin": {"stamped": True, "emoji": "🐶"}},
+            "2026-04-09": {"checkin": {"stamped": True, "emoji": "🐶"}},
+        }
+        emoji, combo = repeated_stamp_bias(history, "2026-04-10")
+        self.assertEqual(emoji, "🐶")
+        self.assertEqual(combo, 3)
 
 
 if __name__ == "__main__":
