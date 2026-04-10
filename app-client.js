@@ -170,6 +170,16 @@
     return `${hours} 小时 ${mins} 分`;
   }
 
+  function formatMinutesCompact(minutes) {
+    const safe = clampInt(minutes, 0, 10000, 0);
+    if (!safe) return "--";
+    const hours = Math.floor(safe / 60);
+    const mins = safe % 60;
+    if (!hours) return `${mins} MIN`;
+    if (!mins) return `${hours} H`;
+    return `${hours}H ${mins}M`;
+  }
+
   function escapeHtml(value) {
     return String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -177,6 +187,14 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#39;");
+  }
+
+  function renderPixelizedValue(value) {
+    return String(value ?? "")
+      .split(/([A-Za-z0-9.+:-]+)/g)
+      .filter((part) => part !== "")
+      .map((part) => (/^[A-Za-z0-9.+:-]+$/.test(part) ? `<span class="mq-pixel-inline">${escapeHtml(part.toUpperCase())}</span>` : escapeHtml(part)))
+      .join("");
   }
 
   function normalizeCheckin(raw) {
@@ -1457,6 +1475,22 @@
     app.proofDraft.note = String(form.querySelector("[name='note']").value || "");
   }
 
+  function refreshDurationReadout(form) {
+    const readout = form.querySelector(".mq-slider-readout");
+    if (!readout) return;
+    const currentGoal = goalMinutesForDate(form.querySelector("[name='date_key']").value || currentDayKey());
+    const minutes = clampInt(form.querySelector("[name='duration_minutes']").value, 1, 720, currentGoal);
+    const strong = readout.querySelector("strong");
+    const span = readout.querySelector("span");
+    if (strong) strong.innerHTML = renderPixelizedValue(formatMinutesCompact(minutes));
+    if (span) span.textContent = `${minutes} 分钟`;
+    const labels = form.querySelector(".mq-range-labels");
+    if (labels) {
+      const middle = labels.querySelector("[data-goal-minutes]");
+      if (middle) middle.textContent = `${currentGoal} MIN`;
+    }
+  }
+
   async function handleProofFileChange(event) {
     const input = event.target;
     if (!input.matches("[name='evidence']")) return;
@@ -1612,7 +1646,7 @@
     return `
       <article class="mq-mini-metric ${tone}">
         <span>${escapeHtml(label)}</span>
-        <strong>${escapeHtml(value)}</strong>
+        <strong>${renderPixelizedValue(value)}</strong>
       </article>
     `;
   }
@@ -1636,12 +1670,12 @@
     document.getElementById("hero-level").textContent = `LV.${current.level}`;
     document.getElementById("hero-name").textContent = app.user?.display_name || "泡面侠";
     document.getElementById("hero-title").textContent = statusCopy(today);
-    document.getElementById("xp-total").textContent = `${app.state.totalXp} 块泡面`;
-    document.getElementById("xp-next").textContent = next ? `距离 Lv.${next.level} 还差 ${Math.max(0, next.xp - app.state.totalXp)} 块泡面` : "已经把这个世界刷到顶了";
+    document.getElementById("xp-total").innerHTML = renderPixelizedValue(`${app.state.totalXp} 块泡面`);
+    document.getElementById("xp-next").innerHTML = next ? renderPixelizedValue(`距离 Lv.${next.level} 还差 ${Math.max(0, next.xp - app.state.totalXp)} 块泡面`) : "已经把这个世界刷到顶了";
     document.getElementById("xp-fill").style.width = `${Math.round(ratio * 100)}%`;
     const streak = document.getElementById("hero-streak");
     streak.classList.toggle("mq-hidden", app.state.streak <= 1);
-    streak.textContent = `连签 ${app.state.streak} 天`;
+    streak.innerHTML = `连签 ${renderPixelizedValue(`${app.state.streak}`)} 天`;
     document.getElementById("learner-role-pill").textContent = "泡面侠";
 
     document.getElementById("hero-metrics").innerHTML = [
@@ -1785,7 +1819,7 @@
       .map(
         (point) => `
           <circle cx="${point.x}" cy="${point.y}" r="4" fill="#f5c842"></circle>
-          <text x="${point.x}" y="${point.y - 10}" text-anchor="middle" fill="#b7c2d8" font-size="11">${point.item.studyMinutes || 0}m</text>
+          <text x="${point.x}" y="${point.y - 10}" text-anchor="middle" fill="#b7c2d8" font-size="11" font-family="'Press Start 2P', monospace">${point.item.studyMinutes || 0}M</text>
         `,
       )
       .join("");
@@ -1826,8 +1860,8 @@
         <svg viewBox="0 0 180 180" aria-hidden="true">
           <circle cx="90" cy="90" r="54" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="18"></circle>
           ${circles}
-          <text x="90" y="86" text-anchor="middle" fill="#eef2ff" font-size="20" font-weight="700">${completed + over}</text>
-          <text x="90" y="108" text-anchor="middle" fill="#b7c2d8" font-size="12">达标天数</text>
+          <text x="90" y="86" text-anchor="middle" fill="#eef2ff" font-size="20" font-weight="700" font-family="'Press Start 2P', monospace">${completed + over}</text>
+          <text x="90" y="108" text-anchor="middle" fill="#b7c2d8" font-size="12" font-family="'Press Start 2P', monospace">GOAL</text>
         </svg>
       </div>
     `;
@@ -2014,6 +2048,7 @@
     const ringClass = ringTone(day);
     const goal = day.status.goalMinutes || goalMinutesForDate();
     const draft = app.proofDraft || defaultProofDraft();
+    const sliderMinutes = clampInt(draft.durationMinutes || goal, 1, 720, goal);
     const reviewNotice = renderReviewNotice();
     const selectedFiles = draft.files.length
       ? draft.files
@@ -2045,7 +2080,7 @@
                 <circle class="mq-ring-fill ${ringClass}" cx="70" cy="70" r="52" style="stroke-dasharray:${CIRCUMFERENCE};stroke-dashoffset:${ringStroke(day)}"></circle>
               </svg>
               <div class="mq-ring-core">
-                <strong class="pixel">${approved ? formatMinutes(approved).replaceAll(" ", "") : "--"}</strong>
+                <strong>${renderPixelizedValue(approved ? formatMinutesCompact(approved) : "--")}</strong>
                 <span>${approved ? "已被认可" : pending ? "等待小和点头" : "还没开始结算"}</span>
               </div>
             </div>
@@ -2066,8 +2101,19 @@
             </div>
           </div>
           <form id="proof-form" class="mq-proof-form">
-            <label>学习时长
-              <input name="duration_minutes" type="number" min="1" max="720" placeholder="例如 45" value="${escapeHtml(draft.durationMinutes)}" required>
+            <label class="wide mq-slider-field">学习时长
+              <div class="mq-slider-shell">
+                <div class="mq-slider-readout">
+                  <strong>${renderPixelizedValue(formatMinutesCompact(sliderMinutes))}</strong>
+                  <span>${sliderMinutes} 分钟</span>
+                </div>
+                <input name="duration_minutes" class="mq-time-range" type="range" min="1" max="720" step="1" value="${sliderMinutes}" required>
+                <div class="mq-range-labels">
+                  <span>1 MIN</span>
+                  <span data-goal-minutes>${goal} MIN</span>
+                  <span>720 MIN</span>
+                </div>
+              </div>
             </label>
             <label>学习日期
               <input name="date_key" type="date" value="${escapeHtml(draft.dateKey || currentDayKey())}" required>
@@ -2126,7 +2172,7 @@
               <article class="mq-journey-card ${tone}">
                 <div class="mq-journey-top">
                   <strong>${escapeHtml(dateKey)}</strong>
-                  <span>+${day.xpEarned} 块泡面</span>
+                  <span>${renderPixelizedValue(`+${day.xpEarned} 块泡面`)}</span>
                 </div>
                 <p>已认可 ${formatMinutes(approvedMinutes(day))} · 待审核 ${formatMinutes(pendingMinutes(day))}</p>
                 <p>任务 ${countDoneTasks(day)}/3 · 日志 ${journalCount(day)}/3</p>
@@ -2167,9 +2213,9 @@
           <div class="mq-panel-head">
             <div><p class="mq-panel-kicker">cute summary</p><h2>小和会看到的你</h2></div>
           </div>
-          <div class="mq-story-list">
+            <div class="mq-story-list">
             <div class="mq-story-line">最近一次盖章：${app.state.lastDate ? formatDate(app.state.lastDate) : "还没有"}</div>
-            <div class="mq-story-line">连续签到：${app.state.streak} 天</div>
+            <div class="mq-story-line">连续签到：${renderPixelizedValue(`${app.state.streak}`)} 天</div>
             <div class="mq-story-line">最近 7 天里，只要小和点头，泡面条就会跟着冲刺。</div>
           </div>
         </section>
@@ -2241,9 +2287,13 @@
     const proofForm = document.getElementById("proof-form");
     if (proofForm) proofForm.addEventListener("submit", submitProof);
     if (proofForm) {
-      proofForm.addEventListener("input", () => syncProofDraftFromForm(proofForm));
+      proofForm.addEventListener("input", () => {
+        syncProofDraftFromForm(proofForm);
+        refreshDurationReadout(proofForm);
+      });
       const fileInput = proofForm.querySelector("[name='evidence']");
       if (fileInput) fileInput.addEventListener("change", (event) => void handleProofFileChange(event));
+      refreshDurationReadout(proofForm);
     }
     document.querySelectorAll("[data-bonus-task-id]").forEach((form) => {
       form.addEventListener("submit", handleBonusSubmission);
@@ -2333,7 +2383,7 @@
             (item) => `
               <button type="button" class="mq-queue-card ${item.user?.id === app.adminSelectedUserId ? "active" : ""}" data-admin-user-id="${item.user?.id}">
                 <strong>${escapeHtml(item.user?.display_name || item.user?.username || "泡面侠")}</strong>
-                <span>${item.pending_count} 份证明待处理</span>
+                <span>${renderPixelizedValue(`${item.pending_count}`)} 份证明待处理</span>
               </button>
             `,
           )
@@ -2367,7 +2417,7 @@
             return `
               <button type="button" class="mq-admin-user-pill ${item.user?.id === app.adminSelectedUserId ? "active" : ""}" data-admin-user-id="${item.user?.id}">
                 <strong>${escapeHtml(item.user?.display_name || item.user?.username || "泡面侠")}</strong>
-                <span>Lv.${summary.level?.level || 1} · ${escapeHtml(hot)}</span>
+                <span>${renderPixelizedValue(`Lv.${summary.level?.level || 1}`)} · ${escapeHtml(hot)}</span>
               </button>
             `;
           })
@@ -2480,8 +2530,8 @@
             <p>@${escapeHtml(detail.user?.username || "")} · 最近登录 ${formatDateTime(detail.user?.last_login_at)}</p>
           </div>
           <div class="mq-admin-focus-badges">
-            <span class="mq-pill">Lv.${summary.level?.level || 1}</span>
-            <span class="mq-pill">${summary.totalXp || 0} 块泡面</span>
+            <span class="mq-pill">${renderPixelizedValue(`Lv.${summary.level?.level || 1}`)}</span>
+            <span class="mq-pill">${renderPixelizedValue(`${summary.totalXp || 0} 块泡面`)}</span>
           </div>
         </div>
 
